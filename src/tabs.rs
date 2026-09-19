@@ -234,11 +234,15 @@ impl Tabs {
         let to = ((idx as i32 + delta) % n + n) % n;
         let mut tab = self.tabs.remove(idx);
         let to = to as usize;
-        // Landing between two tabs of one group joins it; landing at a
-        // group's edge does not.
+        // Landing next to its own group keeps the tab in it, so a group's
+        // first tab can move to the front. Landing between two tabs of
+        // another group joins that one; anywhere else leaves the group.
         let before = if to > 0 { self.tabs.get(to - 1).and_then(|t| t.group) } else { None };
         let after = self.tabs.get(to).and_then(|t| t.group);
-        tab.group = if before.is_some() && before == after { before } else { None };
+        let own = tab.group;
+        tab.group = if own.is_some() && (before == own || after == own) { own }
+            else if before.is_some() && before == after { before }
+            else { None };
         self.tabs.insert(to, tab);
         if self.active == idx { self.active = to; }
         else if idx < self.active && to >= self.active { self.active -= 1; }
@@ -406,6 +410,19 @@ mod tests {
         assert!(t.tabs[1].group.is_some(), "landing between grouped tabs joins the group");
         t.move_tab(1, -1);
         assert_eq!(t.tabs[0].uri, "a");
-        assert!(t.tabs[0].group.is_none());
+        assert!(t.tabs[0].group.is_some(), "moving to the front of its own group keeps the group");
+        t.move_tab(0, 2);
+        assert_eq!(t.tabs[2].uri, "a");
+        assert!(t.tabs[2].group.is_some(), "the end of its own group too");
+    }
+
+    #[test]
+    fn the_first_group_can_have_its_tabs_reordered() {
+        let mut t = three();
+        t.set_group(0, "g");
+        t.set_group(1, "g");
+        t.move_tab(1, -1);
+        let order: Vec<(&str, bool)> = t.tabs.iter().map(|x| (x.uri.as_str(), x.group.is_some())).collect();
+        assert_eq!(order, [("b", true), ("a", true), ("c", false)]);
     }
 }
