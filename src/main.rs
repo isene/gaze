@@ -596,7 +596,14 @@ fn tabbar_markup(tabs: &Tabs) -> String {
     let mut out = String::new();
     let mut last_group: Option<u64> = None;
     let mut n = 0;
+    // With many tabs the bar is cut at the right edge; start it a few
+    // tabs before the current one so that one always shows.
+    let vis = tabs.visible_indices();
+    let pos = vis.iter().position(|&i| i == tabs.active).unwrap_or(0);
+    let first_shown = if pos >= 8 { vis[pos - 4] } else { 0 };
+    if first_shown > 0 { out.push_str("<span foreground=\"#7a7a7a\"> …</span>"); }
     for (i, t) in tabs.tabs.iter().enumerate() {
+        if i < first_shown { if tabs.visible(i) { n += 1; } continue; }
         let group = t.group.and_then(|g| tabs.group_by_id(g));
         // An open group shows only as its colour on the tabs; a folded one
         // needs a label, since its tabs are hidden.
@@ -610,12 +617,15 @@ fn tabbar_markup(tabs: &Tabs) -> String {
         }
         if !tabs.visible(i) { continue; }
         n += 1;
+        if n > 1 && i > first_shown { out.push_str("<span foreground=\"#5c5c5c\"> │</span>"); }
         let raw = if t.title.is_empty() { t.uri.trim_start_matches("https://").trim_start_matches("http://").to_string() } else { t.title.clone() };
         let short: String = raw.chars().take(20).collect();
         let text = glib::markup_escape_text(short.trim());
         let color = group.map(|g| tabs::color_hex(&g.color)).unwrap_or_else(|| (if t.pending { "#7a7a7a" } else { "#c8c8c8" }).to_string());
         if i == tabs.active {
-            out.push_str(&format!(" <span background=\"#e6e6e6\" foreground=\"#1e1e1e\"><b> {} {} </b></span>", n, text));
+            // The current tab: a light pill, its text in the group's colour.
+            let fg = group.map(|g| tabs::color_hex(&g.color)).unwrap_or_else(|| "#1e1e1e".to_string());
+            out.push_str(&format!(" <span background=\"#e6e6e6\" foreground=\"{}\"><b> {} {} </b></span>", fg, n, text));
         } else {
             out.push_str(&format!(" <span foreground=\"{}\">{} {}</span>", color, n, text));
         }
@@ -655,7 +665,11 @@ fn open_tab(shared: &Shared, uri: &str, background: bool) -> u64 {
 
 /// A tab for a window a page opens itself; WebKit loads it.
 fn popup_tab(shared: &Shared, parent: &WebView) -> WebView {
-    let id = shared.borrow_mut().tabs.open("about:blank", false);
+    let opener = {
+        let a = shared.borrow();
+        a.views.iter().find(|(_, v)| *v == parent).map(|(id, _)| *id)
+    };
+    let id = shared.borrow_mut().tabs.open_from("about:blank", false, opener);
     let view = make_view(shared, id, Some(parent));
     attach(shared, id, view.clone());
     show_active(shared);
@@ -778,6 +792,9 @@ fn on_key(shared: &Shared, key: gdk::Key, state: gdk::ModifierType) -> glib::Pro
                 set_mode(shared, Mode::Normal);
                 return Stop;
             }
+            // Tab walks the page's fields; left to GTK it would walk widgets.
+            if key == gdk::Key::Tab { with_view(shared, |v| run_js(v, "window.__gaze && window.__gaze.focusNext(1)")); return Stop; }
+            if key == gdk::Key::ISO_Left_Tab { with_view(shared, |v| run_js(v, "window.__gaze && window.__gaze.focusNext(-1)")); return Stop; }
             Proceed
         }
         Mode::Hint => {

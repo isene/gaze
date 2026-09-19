@@ -47,6 +47,26 @@ pub const PAGE: &str = r#"
     trackFocus() {
       document.addEventListener('focusin', e => { if (editable(e.target)) post({ t: 'focus', editable: true }); }, true);
       document.addEventListener('focusout', e => { if (editable(e.target)) post({ t: 'focus', editable: false }); }, true);
+      // A click says it too: focusin does not fire again for a field that
+      // already had the focus when the window lost and regained it.
+      document.addEventListener('mousedown', e => {
+        const t = e.target;
+        const field = t && t.closest ? (editable(t) ? t : t.closest('input, textarea, select, [contenteditable]')) : null;
+        post({ t: 'focus', editable: !!(field && editable(field)) });
+      }, true);
+    },
+    focusables() {
+      const sel = 'input:not([type=hidden]):not([disabled]), textarea:not([disabled]), select:not([disabled]), button:not([disabled]), a[href], [contenteditable], [tabindex]:not([tabindex="-1"])';
+      return [...document.querySelectorAll(sel)].filter(visible);
+    },
+    focusNext(dir) {
+      const list = this.focusables();
+      if (!list.length) return false;
+      const i = list.indexOf(document.activeElement);
+      const next = list[(i + dir + list.length) % list.length];
+      next.focus();
+      if (next.select && (next.tagName === 'INPUT' || next.tagName === 'TEXTAREA')) { try { next.select(); } catch (e) {} }
+      return true;
     },
     blur() { if (document.activeElement) document.activeElement.blur(); },
     focusFirstInput() {

@@ -40,6 +40,9 @@ pub struct Tab {
     pub title: String,
     #[serde(default)]
     pub group: Option<u64>,
+    /// The tab this one was opened from as a popup; closing returns there.
+    #[serde(default)]
+    pub opener: Option<u64>,
     /// Restored from the session but not loaded yet.
     #[serde(skip)]
     pub pending: bool,
@@ -90,11 +93,16 @@ impl Tabs {
     /// Open a tab after the current one. It joins the current tab's group,
     /// the way a link opened from a grouped tab does in Firefox.
     pub fn open(&mut self, uri: &str, background: bool) -> u64 {
+        self.open_from(uri, background, None)
+    }
+
+    /// Open a tab that knows its opener: a popup the page asked for.
+    pub fn open_from(&mut self, uri: &str, background: bool, opener: Option<u64>) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         let group = self.current().and_then(|t| t.group);
         let at = if self.tabs.is_empty() { 0 } else { self.active + 1 };
-        self.tabs.insert(at, Tab { id, uri: uri.to_string(), title: String::new(), group, pending: false });
+        self.tabs.insert(at, Tab { id, uri: uri.to_string(), title: String::new(), group, opener, pending: false });
         if !background || self.tabs.len() == 1 { self.active = at; }
         id
     }
@@ -103,11 +111,16 @@ impl Tabs {
     /// last one when it was the last.
     pub fn close(&mut self, idx: usize) -> Option<Tab> {
         if idx >= self.tabs.len() { return None; }
+        let was_current = idx == self.active;
         let tab = self.tabs.remove(idx);
         if self.tabs.is_empty() {
             self.active = 0;
         } else if idx < self.active || self.active >= self.tabs.len() {
             self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1);
+        }
+        // A popup that closes hands the focus back to the page that opened it.
+        if was_current {
+            if let Some(back) = tab.opener.and_then(|o| self.index_of(o)) { self.active = back; }
         }
         Some(tab)
     }
@@ -328,6 +341,17 @@ mod tests {
         t.close(0);
         assert!(t.is_empty());
         assert_eq!(t.active, 0);
+    }
+
+    #[test]
+    fn a_popup_returns_to_its_opener_when_it_closes() {
+        let mut t = three();
+        t.active = 0;
+        let opener = t.tabs[0].id;
+        t.open_from("popup", false, Some(opener));
+        assert_eq!(t.active, 1);
+        t.close(1);
+        assert_eq!(t.tabs[t.active].uri, "a", "back to the opener, not to the next tab");
     }
 
     #[test]
