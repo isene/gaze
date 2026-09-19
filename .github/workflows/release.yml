@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+# gaze links to the system's WebKitGTK 6.0 and GTK 4, so it is built on
+# the platform it runs on and the binary needs those libraries installed.
+jobs:
+  build:
+    name: Build ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: gaze-linux-x86_64
+          - os: ubuntu-24.04-arm
+            artifact: gaze-linux-aarch64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install WebKitGTK and GTK 4
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkitgtk-6.0-dev libgtk-4-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Package
+        run: |
+          cp target/release/gaze ${{ matrix.artifact }}
+          chmod +x ${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            gaze needs WebKitGTK 6.0 and GTK 4 on the machine:
+            ```bash
+            sudo apt install libwebkitgtk-6.0-4 libgtk-4-1   # Debian / Ubuntu
+            chmod +x gaze-linux-x86_64
+            sudo cp gaze-linux-x86_64 /usr/local/bin/gaze
+            ```
+
+            ## Platforms
+            - `gaze-linux-x86_64` - Linux (Intel/AMD 64-bit)
+            - `gaze-linux-aarch64` - Linux (ARM 64-bit)
+
+      - name: Upload the binaries, one at a time
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The upload endpoint answers 500 when several files go up at once.
+          for f in artifacts/*/*; do
+            for try in 1 2 3; do
+              gh release upload "$GITHUB_REF_NAME" "$f" --clobber && break
+              echo "upload of $f failed; waiting 10 s"
+              sleep 10
+            done
+          done
