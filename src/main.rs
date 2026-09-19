@@ -99,17 +99,7 @@ fn with_app<R>(f: impl FnOnce(&Shared) -> R) -> Option<R> {
 }
 
 fn main() {
-    // A panic ends up in ~/.gaze/crash.log as well as on stderr, since
-    // gaze is mostly started without a terminal.
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        use std::io::Write;
-        let when = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open(config::gaze_dir().join("crash.log")) {
-            let _ = writeln!(f, "{} gaze {}: {}", when, env!("CARGO_PKG_VERSION"), info);
-        }
-        default_hook(info);
-    }));
+    arm_crash_log();
     let app = gtk::Application::builder()
         .application_id("org.isene.gaze")
         .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)
@@ -140,6 +130,65 @@ fn main() {
         }
     });
     app.run();
+}
+
+// ------------------------------------------------------------ crash log
+
+static CRASH_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+/// gaze mostly runs without a terminal, so a panic goes to
+/// ~/.gaze/crash.log, a native crash goes there with a backtrace, and
+/// stderr is kept in ~/.gaze/stderr.log.
+fn arm_crash_log() {
+    use std::os::unix::io::IntoRawFd;
+    let dir = config::gaze_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(f) = std::fs::OpenOptions::new().append(true).create(true).open(dir.join("crash.log")) {
+        CRASH_FD.store(f.into_raw_fd(), std::sync::atomic::Ordering::SeqCst);
+    }
+    unsafe {
+        if libc::isatty(2) == 0 {
+            if let Ok(f) = std::fs::File::create(dir.join("stderr.log")) {
+                libc::dup2(f.into_raw_fd(), 2);
+            }
+        }
+        // The first backtrace() call loads libgcc; do it now, not in the handler.
+        let mut warm: [*mut libc::c_void; 4] = [std::ptr::null_mut(); 4];
+        libc::backtrace(warm.as_mut_ptr(), 4);
+        for sig in [libc::SIGSEGV, libc::SIGBUS, libc::SIGABRT, libc::SIGILL, libc::SIGFPE] {
+            libc::signal(sig, on_fatal_signal as extern "C" fn(libc::c_int) as libc::sighandler_t);
+        }
+    }
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        crash_line(&format!("panic: {}", info));
+        default_hook(info);
+    }));
+}
+
+fn crash_line(text: &str) {
+    let fd = CRASH_FD.load(std::sync::atomic::Ordering::SeqCst);
+    if fd < 0 { return; }
+    let when = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let line = format!("{} gaze {}: {}\n", when, env!("CARGO_PKG_VERSION"), text);
+    unsafe { libc::write(fd, line.as_ptr() as *const libc::c_void, line.len()); }
+}
+
+extern "C" fn on_fatal_signal(sig: libc::c_int) {
+    let fd = CRASH_FD.load(std::sync::atomic::Ordering::SeqCst);
+    unsafe {
+        if fd >= 0 {
+            let head = b"---- gaze: fatal signal ";
+            libc::write(fd, head.as_ptr() as *const libc::c_void, head.len());
+            let digits = [b'0' + (sig / 10) as u8, b'0' + (sig % 10) as u8, b'\n'];
+            libc::write(fd, digits.as_ptr() as *const libc::c_void, 3);
+            let mut frames: [*mut libc::c_void; 64] = [std::ptr::null_mut(); 64];
+            let n = libc::backtrace(frames.as_mut_ptr(), 64);
+            libc::backtrace_symbols_fd(frames.as_ptr(), n, fd);
+        }
+        libc::signal(sig, libc::SIG_DFL);
+        libc::raise(sig);
+    }
 }
 
 // ---------------------------------------------------------------- setup
@@ -429,8 +478,12 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
     {
         let s = shared.clone();
         view.connect_close(move |_| {
-            let idx = s.borrow().tabs.index_of(id);
-            if let Some(i) = idx { close_tab(&s, i); }
+            // Not inside WebKit's own signal: the view goes away a moment later.
+            let s = s.clone();
+            glib::idle_add_local_once(move || {
+                let idx = s.borrow().tabs.index_of(id);
+                if let Some(i) = idx { close_tab(&s, i); }
+            });
         });
     }
     {
