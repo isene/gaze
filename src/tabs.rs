@@ -13,8 +13,14 @@ pub const COLORS: [(&str, &str); 9] = [
     ("orange", "#f0883e"), ("cyan", "#3ac7c7"), ("gray", "#9aa0a6"),
 ];
 
-pub fn color_hex(name: &str) -> &'static str {
-    COLORS.iter().find(|(n, _)| *n == name).map(|(_, hex)| *hex).unwrap_or("#9aa0a6")
+/// A colour name from the list, or a `#rrggbb` value, as `#rrggbb`.
+pub fn color_hex(name: &str) -> String {
+    if is_hex(name) { return name.to_ascii_lowercase(); }
+    COLORS.iter().find(|(n, _)| *n == name).map(|(_, hex)| hex.to_string()).unwrap_or_else(|| "#9aa0a6".into())
+}
+
+fn is_hex(s: &str) -> bool {
+    s.len() == 7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -103,26 +109,46 @@ impl Tabs {
         } else if idx < self.active || self.active >= self.tabs.len() {
             self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1);
         }
-        self.prune_groups();
         Some(tab)
+    }
+
+    /// The group called `name`, made when missing. A colour given here
+    /// (a name from the list or `#rrggbb`) is applied; an empty one leaves
+    /// the group's colour alone, or picks the first unused for a new group.
+    pub fn ensure_group(&mut self, name: &str, color: &str) -> u64 {
+        let name = name.trim();
+        if let Some(g) = self.groups.iter_mut().find(|g| g.name.eq_ignore_ascii_case(name)) {
+            if is_hex(color) || COLORS.iter().any(|(n, _)| *n == color) { g.color = color.to_string(); }
+            return g.id;
+        }
+        let id = self.groups.iter().map(|g| g.id).max().unwrap_or(0) + 1;
+        let used: Vec<&str> = self.groups.iter().map(|g| g.color.as_str()).collect();
+        let color = if is_hex(color) || COLORS.iter().any(|(n, _)| *n == color) { color.to_string() } else {
+            COLORS.iter().map(|(n, _)| *n).find(|n| !used.contains(n))
+                .unwrap_or(COLORS[self.groups.len() % COLORS.len()].0).to_string()
+        };
+        self.groups.push(Group { id, name: name.to_string(), color, collapsed: false });
+        id
+    }
+
+    /// Drop a group that has no tabs. False when it has some, or is unknown.
+    pub fn delete_group(&mut self, name: &str) -> Result<(), String> {
+        let Some(g) = self.group_by_name(name) else { return Err(format!("No group called {}", name.trim())) };
+        let (id, n) = (g.id, self.tabs_in(g.id).len());
+        if n > 0 { return Err(format!("{} still has {} tabs; :group-close closes them", name.trim(), n)); }
+        self.groups.retain(|g| g.id != id);
+        Ok(())
+    }
+
+    pub fn empty_groups(&self) -> Vec<&Group> {
+        self.groups.iter().filter(|g| self.tabs_in(g.id).is_empty()).collect()
     }
 
     /// Put the tab at `idx` in the named group, creating the group when it
     /// is new. The tab moves next to the group's other tabs.
     pub fn set_group(&mut self, idx: usize, name: &str) -> Option<u64> {
         if idx >= self.tabs.len() || name.trim().is_empty() { return None; }
-        let name = name.trim();
-        let gid = match self.group_by_name(name) {
-            Some(g) => g.id,
-            None => {
-                let id = self.groups.iter().map(|g| g.id).max().unwrap_or(0) + 1;
-                let used: Vec<&str> = self.groups.iter().map(|g| g.color.as_str()).collect();
-                let color = COLORS.iter().map(|(n, _)| *n).find(|n| !used.contains(n))
-                    .unwrap_or(COLORS[self.groups.len() % COLORS.len()].0);
-                self.groups.push(Group { id, name: name.to_string(), color: color.to_string(), collapsed: false });
-                id
-            }
-        };
+        let gid = self.ensure_group(name, "");
         if self.tabs[idx].group == Some(gid) { return Some(gid); }
         let was_active = self.tabs[self.active].id;
         let mut tab = self.tabs.remove(idx);
@@ -133,7 +159,6 @@ impl Tabs {
         };
         self.tabs.insert(at, tab);
         self.active = self.index_of(was_active).unwrap_or(0);
-        self.prune_groups();
         Some(gid)
     }
 
@@ -147,7 +172,6 @@ impl Tabs {
         let at = self.tabs.iter().rposition(|t| t.group == Some(gid)).map(|l| l + 1).unwrap_or(idx);
         self.tabs.insert(at, tab);
         self.active = self.index_of(was_active).unwrap_or(0);
-        self.prune_groups();
     }
 
     pub fn rename_group(&mut self, gid: u64, name: &str) {
@@ -155,7 +179,7 @@ impl Tabs {
     }
 
     pub fn recolor_group(&mut self, gid: u64, color: &str) -> bool {
-        if !COLORS.iter().any(|(n, _)| *n == color) { return false; }
+        if !is_hex(color) && !COLORS.iter().any(|(n, _)| *n == color) { return false; }
         if let Some(g) = self.groups.iter_mut().find(|g| g.id == gid) { g.color = color.to_string(); }
         true
     }
@@ -206,12 +230,10 @@ impl Tabs {
         if self.active == idx { self.active = to; }
         else if idx < self.active && to >= self.active { self.active -= 1; }
         else if idx > self.active && to <= self.active { self.active += 1; }
-        self.prune_groups();
     }
 
+    /// A tab that points at a group the file no longer has loses it.
     fn prune_groups(&mut self) {
-        let used: Vec<u64> = self.tabs.iter().filter_map(|t| t.group).collect();
-        self.groups.retain(|g| used.contains(&g.id));
         for t in &mut self.tabs {
             if let Some(g) = t.group { if !self.groups.iter().any(|x| x.id == g) { t.group = None; } }
         }
@@ -259,7 +281,24 @@ mod tests {
         let order: Vec<&str> = t.tabs.iter().map(|x| x.uri.as_str()).collect();
         assert_eq!(order, ["c", "a", "b"]);
         t.ungroup(0);
-        assert!(t.groups.is_empty(), "an empty group is dropped");
+        assert_eq!(t.groups.len(), 1, "an empty group stays until deleted");
+        assert!(t.delete_group("news").is_ok());
+        assert!(t.groups.is_empty());
+    }
+
+    #[test]
+    fn a_group_can_be_made_ahead_with_a_hex_colour() {
+        let mut t = three();
+        let id = t.ensure_group("Dualog", "#5faf87");
+        assert_eq!(t.empty_groups().len(), 1);
+        assert_eq!(color_hex(&t.groups[0].color), "#5faf87");
+        assert_eq!(t.delete_group("Dualog"), Ok(()));
+        t.ensure_group("Dualog", "");
+        t.set_group(0, "dualog");
+        assert_eq!(t.delete_group("Dualog").unwrap_err(), "Dualog still has 1 tabs; :group-close closes them");
+        assert!(t.recolor_group(t.tabs[0].group.unwrap(), "#D78700"));
+        assert!(!t.recolor_group(t.tabs[0].group.unwrap(), "#12345"));
+        let _ = id;
     }
 
     #[test]

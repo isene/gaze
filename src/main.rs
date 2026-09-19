@@ -4,6 +4,7 @@
 mod adblock;
 mod bookmarks;
 mod config;
+mod history;
 mod js;
 mod keys;
 mod passwords;
@@ -49,6 +50,7 @@ struct Ui {
     status: gtk::Label,
     right: gtk::Label,
     entry: gtk::Entry,
+    completion: gtk::Label,
 }
 
 struct App {
@@ -75,6 +77,13 @@ struct App {
     save_pending: bool,
     keymap: keys::Keymap,
     marks: bookmarks::Bookmarks,
+    hist: history::History,
+    /// What the open prompt offers right now, and which one Tab picked.
+    candidates: Vec<history::Candidate>,
+    selected: Option<usize>,
+    /// True while gaze itself writes the command line, so the write does
+    /// not count as typing.
+    setting_text: bool,
     /// The compiled ad blocker, once it is ready.
     filter: Option<UserContentFilter>,
 }
@@ -177,24 +186,33 @@ fn build(app: &gtk::Application) -> Shared {
     let entry = gtk::Entry::new();
     entry.add_css_class("cmdline");
     entry.set_visible(false);
+    let completion = gtk::Label::new(None);
+    completion.set_xalign(0.0);
+    completion.set_use_markup(true);
+    completion.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    completion.add_css_class("completion");
+    completion.set_visible(false);
     vbox.append(&tabbar);
     vbox.append(&stack);
+    vbox.append(&completion);
     vbox.append(&bottom);
     vbox.append(&entry);
     window.set_child(Some(&vbox));
 
     let session_path = dir.join("session.json");
-    let tabs = Tabs::load(&session_path);
+    let mut tabs = Tabs::load(&session_path);
+    for g in &cfg.groups { tabs.ensure_group(&g.name, &g.color); }
+    let hist = history::History::load(dir.join("history"));
     let store = Store::new(dir.join("passwords"));
     let keymap = keys::Keymap::load(dir.join("keys.yml"));
     let marks = bookmarks::Bookmarks::load(dir.join("bookmarks"));
     let shared: Shared = Rc::new(RefCell::new(App {
-        ui: Ui { window: window.clone(), tabbar, stack, status, right, entry: entry.clone() },
+        ui: Ui { window: window.clone(), tabbar, stack, status, right, entry: entry.clone(), completion },
         cfg, tabs, views: HashMap::new(), session, settings,
         mode: Mode::Normal, keys: String::new(), ask: Ask::Command, prompt: None,
         message: String::new(), hover: String::new(), store, fill_at: HashMap::new(),
         closed: Vec::new(), find: String::new(), session_path, save_pending: false,
-        keymap, marks, filter: None,
+        keymap, marks, hist, candidates: Vec::new(), selected: None, setting_text: false, filter: None,
     }));
 
     let keys = gtk::EventControllerKey::new();
@@ -207,6 +225,10 @@ fn build(app: &gtk::Application) -> Shared {
     {
         let s = shared.clone();
         entry.connect_activate(move |_| entry_done(&s));
+    }
+    {
+        let s = shared.clone();
+        entry.connect_changed(move |_| on_entry_changed(&s));
     }
     {
         let s = shared.clone();
@@ -235,6 +257,7 @@ fn style() {
                               background: #1e1e1e; color: #c8c8c8; }
         .cmdline { font-family: monospace; font-size: 13px; background: #101010; color: #ffffff;
                    border: none; border-radius: 0; padding: 2px 6px; min-height: 0; }
+        .completion { font-family: monospace; font-size: 12px; padding: 4px 6px; background: #141414; color: #c8c8c8; }
     ";
     let provider = gtk::CssProvider::new();
     provider.load_from_string(css);
@@ -287,6 +310,12 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
                     refresh(&s);
                 }
                 LoadEvent::Finished => {
+                    {
+                        let mut a = s.borrow_mut();
+                        let (uri, title) = (v.uri().map(|u| u.to_string()).unwrap_or_default(),
+                                            v.title().map(|t| t.to_string()).unwrap_or_default());
+                        a.hist.record(&uri, &title);
+                    }
                     refresh(&s);
                     schedule_save(&s);
                     maybe_fill(&s, id);
@@ -300,8 +329,11 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
         view.connect_title_notify(move |v| {
             {
                 let mut a = s.borrow_mut();
+                let title = v.title().map(|t| t.to_string()).unwrap_or_default();
                 if let Some(i) = a.tabs.index_of(id) {
-                    a.tabs.tabs[i].title = v.title().map(|t| t.to_string()).unwrap_or_default();
+                    a.tabs.tabs[i].title = title.clone();
+                    let uri = a.tabs.tabs[i].uri.clone();
+                    a.hist.retitle(&uri, &title);
                 }
             }
             refresh(&s);
@@ -518,12 +550,15 @@ fn tabbar_markup(tabs: &Tabs) -> String {
         let raw = if t.title.is_empty() { t.uri.trim_start_matches("https://").trim_start_matches("http://").to_string() } else { t.title.clone() };
         let short: String = raw.chars().take(20).collect();
         let text = glib::markup_escape_text(short.trim());
-        let color = group.map(|g| tabs::color_hex(&g.color)).unwrap_or(if t.pending { "#7a7a7a" } else { "#c8c8c8" });
+        let color = group.map(|g| tabs::color_hex(&g.color)).unwrap_or_else(|| (if t.pending { "#7a7a7a" } else { "#c8c8c8" }).to_string());
         if i == tabs.active {
             out.push_str(&format!(" <span background=\"#e6e6e6\" foreground=\"#1e1e1e\"><b> {} {} </b></span>", n, text));
         } else {
             out.push_str(&format!(" <span foreground=\"{}\">{} {}</span>", color, n, text));
         }
+    }
+    for g in tabs.empty_groups() {
+        out.push_str(&format!("  <span foreground=\"{}\" alpha=\"60%\">·{}</span>", tabs::color_hex(&g.color), glib::markup_escape_text(&g.name)));
     }
     out
 }
@@ -663,8 +698,12 @@ fn on_key(shared: &Shared, key: gdk::Key, state: gdk::ModifierType) -> glib::Pro
     let ch = key.to_unicode();
     match mode {
         Mode::Command => {
-            if key == gdk::Key::Escape { end_ask(shared); return Stop; }
-            Proceed
+            match key {
+                gdk::Key::Escape => { end_ask(shared); Stop }
+                gdk::Key::Tab | gdk::Key::Down => { complete_move(shared, 1); Stop }
+                gdk::Key::ISO_Left_Tab | gdk::Key::Up => { complete_move(shared, -1); Stop }
+                _ => Proceed,
+            }
         }
         Mode::Insert => {
             if key == gdk::Key::Escape || (ctrl && ch == Some('[')) {
@@ -838,9 +877,9 @@ fn begin_ask(shared: &Shared, ask: Ask, prefill: &str) {
         let e = a.ui.entry.clone();
         e.set_visibility(!hidden);
         e.set_placeholder_text(Some(hint));
-        e.set_text(prefill);
         e
     };
+    entry.set_text(prefill);
     refresh(shared);
     entry.set_visible(true);
     entry.grab_focus();
@@ -848,11 +887,14 @@ fn begin_ask(shared: &Shared, ask: Ask, prefill: &str) {
 }
 
 fn end_ask(shared: &Shared) {
-    let entry = {
+    let (entry, completion) = {
         let mut a = shared.borrow_mut();
         a.mode = Mode::Normal;
-        a.ui.entry.clone()
+        a.candidates.clear();
+        a.selected = None;
+        (a.ui.entry.clone(), a.ui.completion.clone())
     };
+    completion.set_visible(false);
     entry.set_visible(false);
     entry.set_text("");
     entry.set_visibility(true);
@@ -881,6 +923,80 @@ fn entry_done(shared: &Shared) {
             }
         }
     }
+}
+
+/// The verb and the query of an open prompt, or None for any other text.
+fn open_query(text: &str) -> Option<(&str, &str)> {
+    let (verb, rest) = text.split_once(' ')?;
+    if matches!(verb, "open" | "o" | "tabopen" | "t") { Some((verb, rest)) } else { None }
+}
+
+fn on_entry_changed(shared: &Shared) {
+    let text = {
+        let a = shared.borrow();
+        if a.setting_text || a.mode != Mode::Command || !matches!(a.ask, Ask::Command) { return; }
+        a.ui.entry.text().to_string()
+    };
+    let candidates = match open_query(&text) {
+        Some((_, query)) => {
+            let a = shared.borrow();
+            let marks: Vec<(String, String)> = a.marks.list().iter().map(|b| (b.url.clone(), b.title.clone())).collect();
+            a.hist.matches(query, &marks, 10)
+        }
+        None => Vec::new(),
+    };
+    {
+        let mut a = shared.borrow_mut();
+        a.candidates = candidates;
+        a.selected = None;
+    }
+    render_completion(shared);
+}
+
+fn render_completion(shared: &Shared) {
+    let (label, markup) = {
+        let a = shared.borrow();
+        let lines: Vec<String> = a.candidates.iter().enumerate().map(|(i, c)| {
+            let title: String = c.title.chars().take(48).collect();
+            let url: String = c.url.chars().take(90).collect();
+            let line = format!("{} {:<48}  {}", if c.bookmark { "★" } else { " " }, title, url);
+            let text = glib::markup_escape_text(&line);
+            if a.selected == Some(i) {
+                format!("<span background=\"#e6e6e6\" foreground=\"#1e1e1e\">{}</span>", text)
+            } else {
+                text.to_string()
+            }
+        }).collect();
+        (a.ui.completion.clone(), lines.join("\n"))
+    };
+    if markup.is_empty() {
+        label.set_visible(false);
+    } else {
+        label.set_markup(&markup);
+        label.set_visible(true);
+    }
+}
+
+/// Tab and Shift-Tab walk the offered pages and put one on the command line.
+fn complete_move(shared: &Shared, dir: i32) {
+    let (entry, text) = {
+        let mut a = shared.borrow_mut();
+        let n = a.candidates.len();
+        if n == 0 { return; }
+        let next = match a.selected {
+            Some(i) => ((i as i32 + dir).rem_euclid(n as i32)) as usize,
+            None if dir > 0 => 0,
+            None => n - 1,
+        };
+        a.selected = Some(next);
+        let verb = open_query(&a.ui.entry.text()).map(|(v, _)| v).unwrap_or("open").to_string();
+        a.setting_text = true;
+        (a.ui.entry.clone(), format!("{} {}", verb, a.candidates[next].url))
+    };
+    entry.set_text(&text);
+    entry.set_position(-1);
+    shared.borrow_mut().setting_text = false;
+    render_completion(shared);
 }
 
 fn find(shared: &Shared, text: &str) {
@@ -982,6 +1098,18 @@ fn run_command(shared: &Shared, line: &str) {
         "groups-fold" => { shared.borrow_mut().tabs.collapse_all(true); refresh(shared); save_session(shared); }
         "groups-unfold" => { shared.borrow_mut().tabs.collapse_all(false); refresh(shared); save_session(shared); }
         "group-rename" | "group-color" | "group-close" | "group-collapse" | "group-expand" => group_command(shared, cmd, arg),
+        "group-delete" => {
+            let name = if arg.is_empty() {
+                let a = shared.borrow();
+                a.tabs.current().and_then(|t| t.group).and_then(|g| a.tabs.group_by_id(g)).map(|g| g.name.clone()).unwrap_or_default()
+            } else { arg.to_string() };
+            if name.is_empty() { set_message(shared, "group-delete <name>"); return; }
+            let r = shared.borrow_mut().tabs.delete_group(&name);
+            match r {
+                Ok(()) => { set_message(shared, &format!("Group {} deleted", name)); refresh(shared); save_session(shared); }
+                Err(e) => set_message(shared, &e),
+            }
+        }
         "groups" => {
             let text = {
                 let a = shared.borrow();
@@ -1081,7 +1209,7 @@ fn group_command(shared: &Shared, cmd: &str, arg: &str) {
         "group-color" => {
             if !shared.borrow_mut().tabs.recolor_group(gid, arg) {
                 let names = tabs::COLORS.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(" ");
-                set_message(shared, &format!("group-color: {}", names));
+                set_message(shared, &format!("group-color: {} or #rrggbb", names));
                 return;
             }
         }
@@ -1432,8 +1560,9 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Tab groups", "ungroup", "take it out again"),
     ("Tab groups", "group-fold", "fold this tab's group away"), ("Tab groups", "group-unfold", ""), ("Tab groups", "group-toggle", ""),
     ("Tab groups", "groups-fold", "fold every group"), ("Tab groups", "groups-unfold", ""),
-    ("Tab groups", "group-rename <name>", ""), ("Tab groups", "group-color <colour>", "blue red yellow green pink purple orange cyan gray"),
-    ("Tab groups", "group-close", "close every tab of the group"), ("Tab groups", "groups", "list the groups"),
+    ("Tab groups", "group-rename <name>", ""), ("Tab groups", "group-color <colour>", "blue red yellow green pink purple orange cyan gray, or #rrggbb"),
+    ("Tab groups", "group-close", "close every tab of the group"), ("Tab groups", "group-delete [name]", "drop an empty group"),
+    ("Tab groups", "groups", "list the groups"),
     ("Bookmarks", "bookmark-add [title]", "bookmark this page"), ("Bookmarks", "bookmark-del [url]", "forget this page's bookmark"),
     ("Bookmarks", "bookmarks", "the list, at gaze://bookmarks"), ("Bookmarks", "bookmark-import <file>", "read a Firefox HTML export"),
     ("Passwords", "fill", "fill the login form; again for the next saved login of the site"),
@@ -1468,8 +1597,13 @@ Every key runs a command from the table; <code>:bind &lt;keys&gt; &lt;command&gt
 <table>{}</table>
 <h2>Tab groups</h2>
 <p>A group is a named, coloured run of tabs, as in Firefox. A tab opened from a grouped tab joins the group.
-A folded group shows as its name and a count; its tabs are skipped until it is unfolded.
-Groups come back with the session at the next start.</p>
+A folded group shows as its name and a count; its tabs are skipped until it is unfolded. A group with no tabs
+stays, dimmed at the end of the bar, until <code>:group-delete</code>. Groups come back with the session, and
+the <code>groups:</code> list in config.yml names groups that exist from the start.</p>
+<h2>Open prompt</h2>
+<p><kbd>o</kbd> lists the pages you were at last; typing narrows the list to pages whose URL or title holds every word,
+bookmarks (★) first. <kbd>Tab</kbd> and <kbd>Shift-Tab</kbd> put one on the line, <kbd>Return</kbd> opens it.
+Visits are kept in <code>~/.gaze/history</code>, the last five thousand pages.</p>
 <h2>Passwords</h2>
 <p>Logins live in <code>~/.gaze/passwords</code>, sealed with a master password you choose the first time.
 A login form is filled when the page loads; after a sign-in with a new or changed password gaze asks whether to save it.

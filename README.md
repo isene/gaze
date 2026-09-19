@@ -14,7 +14,7 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 
 | Key | Does |
 |---|---|
-| `o` / `O` | Open a URL or a search here / in a new tab (`go`, `gO` start from the current URL) |
+| `o` / `O` | Open a URL or a search here / in a new tab (`go`, `gO` start from the current URL). The prompt offers pages from your history and bookmarks; `Tab` picks one |
 | `f` / `F` | Hints: type the letters on a link to follow it / open it in a background tab |
 | `H` / `L` | Back / forward |
 | `r` | Reload |
@@ -35,7 +35,15 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 
 ## Tab groups
 
-`:group work` puts the current tab in the group *work*, made on the spot when it is new. Each group has a colour and shows as a coloured run in the tab bar. A tab opened from a grouped tab joins the group. `zc` folds the group away, and `J`/`K` skip its tabs until `zo` unfolds it. `:ungroup`, `:group-rename <name>`, `:group-color <colour>` (blue red yellow green pink purple orange cyan gray), `:group-close` and `:groups` do what they say. Groups come back with the session at the next start.
+`:group work` puts the current tab in the group *work*, made on the spot when it is new. Each group has a colour and shows as a coloured run in the tab bar. A tab opened from a grouped tab joins the group. `zc` folds the group away, and `J`/`K` skip its tabs until `zo` unfolds it. `:ungroup`, `:group-rename <name>`, `:group-color <colour>`, `:group-close` and `:groups` do what they say. A colour is a name (blue red yellow green pink purple orange cyan gray) or `#rrggbb`.
+
+A group with no tabs stays, dimmed at the end of the bar, until `:group-delete`. Groups come back with the session at the next start, and the config can name groups that exist from the start:
+
+```yaml
+groups:
+  - {name: Work, color: "#5faf87"}
+  - {name: Home, color: orange}
+```
 
 ## Passwords
 
@@ -47,7 +55,9 @@ Logins live in `~/.gaze/passwords`, one file sealed with ChaCha20-Poly1305 under
 - `:passwords` lists the sites and usernames. Passwords themselves are never shown.
 - `:password-import ~/logins.csv` reads the file Firefox writes from `about:logins` → Export Logins. Delete the CSV afterwards.
 
-## Bookmarks
+## History and bookmarks
+
+`o` on its own lists the pages you were at last. Typing narrows the list to pages whose URL or title holds every word you typed, bookmarks (★) first. `Tab` and `Shift-Tab` put one on the line and `Return` opens it. Visits are kept in `~/.gaze/history`, the last five thousand pages.
 
 `M` bookmarks the page; `gb` shows the list, where `f` and the letters open one. `:bookmark-del` forgets the current page. `:bookmark-import ~/bookmarks.html` reads the file Firefox writes from Manage Bookmarks → Import and Backup → Export Bookmarks to HTML. The list is `~/.gaze/bookmarks`, one URL, a tab and a title per line.
 
@@ -66,9 +76,10 @@ Runtime: WebKitGTK 6.0 and GTK 4. To make gaze the browser other programs open l
 
 ## Files
 
-- `~/.gaze/config.yml`: home page, search engine (`%s` is the query), download folder, zoom, scroll step, ad blocking.
+- `~/.gaze/config.yml`: home page, search engine (`%s` is the query), download folder, zoom, scroll step, ad blocking, standing groups.
 - `~/.gaze/keys.yml`: the key bindings you changed.
 - `~/.gaze/bookmarks`: the bookmarks, one per line.
+- `~/.gaze/history`: one line per visit, folded to one entry per page when read.
 - `~/.gaze/session.json`: the open tabs and groups, written when they change and read at start. Only the current tab loads at start; the others load when you go to them.
 - `~/.gaze/passwords`: the sealed logins.
 - `~/.gaze/adblock`: the hosts list and the compiled filter.

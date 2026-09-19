@@ -18,6 +18,16 @@ pub struct Config {
     pub scroll_step: i32,
     /// Block the domains of Steven Black's hosts list.
     pub adblock: bool,
+    /// Tab groups that exist from the start, made when missing.
+    pub groups: Vec<GroupSpec>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct GroupSpec {
+    pub name: String,
+    /// A name from the list (blue red yellow green pink purple orange cyan gray) or `#rrggbb`.
+    pub color: String,
 }
 
 impl Default for Config {
@@ -29,6 +39,7 @@ impl Default for Config {
             zoom: 1.0,
             scroll_step: 80,
             adblock: true,
+            groups: Vec::new(),
         }
     }
 }
@@ -41,6 +52,9 @@ downloads: ~/Downloads
 zoom: 1.0
 scroll_step: 80
 adblock: true
+# Tab groups that always exist, with a colour name or #rrggbb:
+# groups:
+#   - {name: Work, color: '#5faf87'}
 ";
 
 pub fn home_dir() -> PathBuf {
