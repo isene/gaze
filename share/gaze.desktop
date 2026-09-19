@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=gaze
+Comment=Looking out onto the web
+Exec=gaze %U
+Icon=gaze
+Terminal=false
+Type=Application
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupNotify=true

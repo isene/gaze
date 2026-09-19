@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4a2a14"/>
+      <stop offset="1" stop-color="#1e1e1e"/>
+    </linearGradient>
+    <radialGradient id="iris" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#f0c060"/>
+      <stop offset="0.55" stop-color="#c8641e"/>
+      <stop offset="1" stop-color="#7a3a10"/>
+    </radialGradient>
+  </defs>
+  <rect width="256" height="256" rx="48" fill="url(#bg)"/>
+  <!-- window frame -->
+  <rect x="40" y="52" width="176" height="152" rx="10" fill="none" stroke="#a86a3a" stroke-width="8"/>
+  <line x1="128" y1="52" x2="128" y2="204" stroke="#a86a3a" stroke-width="6"/>
+  <line x1="40" y1="128" x2="216" y2="128" stroke="#a86a3a" stroke-width="6"/>
+  <!-- the eye looking out -->
+  <path d="M60 128 Q128 68 196 128 Q128 188 60 128 Z" fill="#f4ead8"/>
+  <circle cx="128" cy="128" r="30" fill="url(#iris)"/>
+  <circle cx="128" cy="128" r="13" fill="#161616"/>
+  <circle cx="138" cy="118" r="6" fill="#ffffff"/>
+</svg>
