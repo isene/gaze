@@ -1,8 +1,11 @@
 //! gaze: looking out onto the web. A keyboard-driven browser around
 //! WebKitGTK, with tab groups and saved logins.
 
+mod adblock;
+mod bookmarks;
 mod config;
 mod js;
+mod keys;
 mod passwords;
 mod tabs;
 
@@ -16,8 +19,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use webkit6::prelude::*;
 use webkit6::{
-    CookiePersistentStorage, Download, FindOptions, LoadEvent, NavigationPolicyDecision, NetworkSession,
-    PolicyDecisionType, ResponsePolicyDecision, Settings, URISchemeRequest, UserContentInjectedFrames,
+    CookiePersistentStorage, Credential, CredentialPersistence, Download, FindOptions, LoadEvent,
+    NavigationPolicyDecision, NetworkSession, PolicyDecisionType, ResponsePolicyDecision, Settings,
+    URISchemeRequest, UserContentFilter, UserContentFilterStore, UserContentInjectedFrames,
     UserContentManager, UserScript, UserScriptInjectionTime, WebContext, WebView,
 };
 
@@ -69,6 +73,10 @@ struct App {
     find: String,
     session_path: PathBuf,
     save_pending: bool,
+    keymap: keys::Keymap,
+    marks: bookmarks::Bookmarks,
+    /// The compiled ad blocker, once it is ready.
+    filter: Option<UserContentFilter>,
 }
 
 type Shared = Rc<RefCell<App>>;
@@ -178,12 +186,15 @@ fn build(app: &gtk::Application) -> Shared {
     let session_path = dir.join("session.json");
     let tabs = Tabs::load(&session_path);
     let store = Store::new(dir.join("passwords"));
+    let keymap = keys::Keymap::load(dir.join("keys.yml"));
+    let marks = bookmarks::Bookmarks::load(dir.join("bookmarks"));
     let shared: Shared = Rc::new(RefCell::new(App {
         ui: Ui { window: window.clone(), tabbar, stack, status, right, entry: entry.clone() },
         cfg, tabs, views: HashMap::new(), session, settings,
         mode: Mode::Normal, keys: String::new(), ask: Ask::Command, prompt: None,
         message: String::new(), hover: String::new(), store, fill_at: HashMap::new(),
         closed: Vec::new(), find: String::new(), session_path, save_pending: false,
+        keymap, marks, filter: None,
     }));
 
     let keys = gtk::EventControllerKey::new();
@@ -209,11 +220,12 @@ fn build(app: &gtk::Application) -> Shared {
         a.tabs.tabs.iter().enumerate().map(|(i, t)| (t.id, i == a.tabs.active)).collect()
     };
     for (id, _) in &restored {
-        let view = make_view(&shared, *id);
+        let view = make_view(&shared, *id, None);
         attach(&shared, *id, view);
     }
     if !restored.is_empty() { show_active(&shared); }
     window.present();
+    adblock_start(&shared);
     shared
 }
 
@@ -234,10 +246,10 @@ fn style() {
 /// A web view for tab `id`, wired to the page script and the signals gaze
 /// listens to. Each view gets its own content manager so a message from
 /// the page says which tab sent it.
-fn make_view(shared: &Shared, id: u64) -> WebView {
-    let (session, settings, zoom) = {
+fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
+    let (session, settings, zoom, filter) = {
         let a = shared.borrow();
-        (a.session.clone(), a.settings.clone(), a.cfg.zoom)
+        (a.session.clone(), a.settings.clone(), a.cfg.zoom, a.filter.clone())
     };
     let ucm = UserContentManager::new();
     ucm.add_script(&UserScript::new(js::PAGE, UserContentInjectedFrames::AllFrames, UserScriptInjectionTime::Start, &[], &[]));
@@ -249,7 +261,13 @@ fn make_view(shared: &Shared, id: u64) -> WebView {
             on_message(&s, id, &text);
         });
     }
-    let view = WebView::builder().network_session(&session).user_content_manager(&ucm).settings(&settings).build();
+    if let Some(f) = &filter { ucm.add_filter(f); }
+    let view = match related {
+        // A popup shares its opener's process and session, so the two
+        // pages can talk (window.opener, postMessage).
+        Some(parent) => WebView::builder().related_view(parent).user_content_manager(&ucm).settings(&settings).build(),
+        None => WebView::builder().network_session(&session).user_content_manager(&ucm).settings(&settings).build(),
+    };
     view.set_vexpand(true);
     view.set_hexpand(true);
     view.set_zoom_level(zoom);
@@ -357,13 +375,42 @@ fn make_view(shared: &Shared, id: u64) -> WebView {
         });
     }
     {
+        // window.open(): give the page a real window as a new tab, so
+        // sign-in popups that report back to their opener keep working.
         let s = shared.clone();
-        view.connect_create(move |_, action| {
-            if let Some(uri) = action.request().and_then(|r| r.uri()) {
-                let s = s.clone();
-                glib::idle_add_local_once(move || { open_tab(&s, &uri, false); });
+        view.connect_create(move |parent, _| {
+            let popup = popup_tab(&s, parent);
+            Some(popup.upcast())
+        });
+    }
+    {
+        let s = shared.clone();
+        view.connect_close(move |_| {
+            let idx = s.borrow().tabs.index_of(id);
+            if let Some(i) = idx { close_tab(&s, i); }
+        });
+    }
+    {
+        // HTTP basic auth: answer from the saved logins when they are
+        // open and know the host; otherwise WebKit's own dialog asks.
+        let s = shared.clone();
+        view.connect_authenticate(move |_, request| {
+            if request.is_retry() || request.is_for_proxy() { return false; }
+            let host = request.host().map(|h| h.to_string()).unwrap_or_default();
+            let login = {
+                let a = s.borrow();
+                if !a.store.unlocked() { None } else {
+                    a.store.for_site(&format!("https://{}", host)).first().map(|l| (*l).clone())
+                        .or_else(|| a.store.for_site(&format!("http://{}", host)).first().map(|l| (*l).clone()))
+                }
+            };
+            match login {
+                Some(l) => {
+                    request.authenticate(Some(&Credential::new(&l.username, &l.password, CredentialPersistence::ForSession)));
+                    true
+                }
+                None => false,
             }
-            None
         });
     }
     view
@@ -473,7 +520,7 @@ fn tabbar_markup(tabs: &Tabs) -> String {
         let text = glib::markup_escape_text(short.trim());
         let color = group.map(|g| tabs::color_hex(&g.color)).unwrap_or(if t.pending { "#7a7a7a" } else { "#c8c8c8" });
         if i == tabs.active {
-            out.push_str(&format!(" <span background=\"#3c3c3c\" foreground=\"#ffffff\"><b> {} {} </b></span>", n, text));
+            out.push_str(&format!(" <span background=\"#e6e6e6\" foreground=\"#1e1e1e\"><b> {} {} </b></span>", n, text));
         } else {
             out.push_str(&format!(" <span foreground=\"{}\">{} {}</span>", color, n, text));
         }
@@ -500,12 +547,22 @@ fn set_mode(shared: &Shared, mode: Mode) {
 
 fn open_tab(shared: &Shared, uri: &str, background: bool) -> u64 {
     let id = shared.borrow_mut().tabs.open(uri, background);
-    let view = make_view(shared, id);
+    let view = make_view(shared, id, None);
     view.load_uri(uri);
     attach(shared, id, view);
     if background { refresh(shared); } else { show_active(shared); }
     save_session(shared);
     id
+}
+
+/// A tab for a window a page opens itself; WebKit loads it.
+fn popup_tab(shared: &Shared, parent: &WebView) -> WebView {
+    let id = shared.borrow_mut().tabs.open("about:blank", false);
+    let view = make_view(shared, id, Some(parent));
+    attach(shared, id, view.clone());
+    show_active(shared);
+    save_session(shared);
+    view
 }
 
 /// Show the current tab, loading it first if it was only restored.
@@ -603,8 +660,6 @@ fn on_key(shared: &Shared, key: gdk::Key, state: gdk::ModifierType) -> glib::Pro
     use glib::Propagation::{Proceed, Stop};
     let mode = shared.borrow().mode;
     let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
-    let alt = state.contains(gdk::ModifierType::ALT_MASK);
-    let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
     let ch = key.to_unicode();
     match mode {
         Mode::Command => {
@@ -639,116 +694,41 @@ fn on_key(shared: &Shared, key: gdk::Key, state: gdk::ModifierType) -> glib::Pro
             }
             Stop
         }
-        Mode::Normal => { normal_key(shared, key, ch, ctrl, alt, shift); Stop }
+        Mode::Normal => { normal_key(shared, key, state); Stop }
     }
 }
 
-fn normal_key(shared: &Shared, key: gdk::Key, ch: Option<char>, ctrl: bool, alt: bool, shift: bool) {
-    use gdk::Key;
-    let step = shared.borrow().cfg.scroll_step as f64;
-    if alt {
-        if let Some(d) = ch.and_then(|c| c.to_digit(10)) {
-            if d >= 1 { goto_visible(shared, d as usize - 1); }
+fn normal_key(shared: &Shared, key: gdk::Key, state: gdk::ModifierType) {
+    if key == gdk::Key::Escape {
+        {
+            let mut a = shared.borrow_mut();
+            a.keys.clear();
+            a.message.clear();
+            a.prompt = None;
         }
+        with_find(shared, |f| f.search_finish());
+        refresh(shared);
         return;
     }
-    if ctrl {
-        match ch {
-            Some('d') => scroll_page(shared, 0.5),
-            Some('u') => scroll_page(shared, -0.5),
-            Some('f') => scroll_page(shared, 0.9),
-            Some('b') => scroll_page(shared, -0.9),
-            Some('q') => quit(shared),
-            _ => {}
-        }
-        return;
-    }
-    let handled = match key {
-        Key::Escape => {
-            {
-                let mut a = shared.borrow_mut();
-                a.keys.clear();
-                a.message.clear();
-                a.prompt = None;
-            }
-            with_find(shared, |f| f.search_finish());
-            refresh(shared);
-            true
-        }
-        Key::Down => { scroll_by(shared, 0, step); true }
-        Key::Up => { scroll_by(shared, 0, -step); true }
-        Key::Left => { scroll_by(shared, -(step as i32), 0.0); true }
-        Key::Right => { scroll_by(shared, step as i32, 0.0); true }
-        Key::Page_Down => { scroll_page(shared, 0.9); true }
-        Key::Page_Up => { scroll_page(shared, -0.9); true }
-        Key::space => { scroll_page(shared, if shift { -0.9 } else { 0.9 }); true }
-        Key::Home => { with_view(shared, |v| run_js(v, js::SCROLL_TOP)); true }
-        Key::End => { with_view(shared, |v| run_js(v, js::SCROLL_BOTTOM)); true }
-        Key::BackSpace => { with_view(shared, |v| v.go_back()); true }
-        _ => false,
-    };
-    if handled { return; }
-    let Some(c) = ch else { return };
-    if c.is_control() { return; }
+    let Some(name) = keys::key_name(key, state) else { return };
     let seq = {
         let mut a = shared.borrow_mut();
-        a.keys.push(c);
+        a.keys.push_str(&name);
         a.keys.clone()
     };
-    let uri = shared.borrow().tabs.current().map(|t| t.uri.clone()).unwrap_or_default();
-    match seq.as_str() {
-        "g" | "z" | "y" | "p" | "P" | "Z" => { refresh(shared); return; }
-        "j" => scroll_by(shared, 0, step),
-        "k" => scroll_by(shared, 0, -step),
-        "h" => scroll_by(shared, -(step as i32), 0.0),
-        "l" => scroll_by(shared, step as i32, 0.0),
-        "gg" => with_view(shared, |v| run_js(v, js::SCROLL_TOP)),
-        "G" => with_view(shared, |v| run_js(v, js::SCROLL_BOTTOM)),
-        "H" => with_view(shared, |v| v.go_back()),
-        "L" => with_view(shared, |v| v.go_forward()),
-        "r" => with_view(shared, |v| v.reload()),
-        "R" => with_view(shared, |v| v.reload_bypass_cache()),
-        "o" => begin_ask(shared, Ask::Command, "open "),
-        "O" | "t" => begin_ask(shared, Ask::Command, "tabopen "),
-        "go" => begin_ask(shared, Ask::Command, &format!("open {}", uri)),
-        "gO" => begin_ask(shared, Ask::Command, &format!("tabopen {}", uri)),
-        ":" => begin_ask(shared, Ask::Command, ""),
-        "/" => begin_ask(shared, Ask::Find, ""),
-        "n" => with_find(shared, |f| f.search_next()),
-        "N" => with_find(shared, |f| f.search_previous()),
-        "d" => { let i = shared.borrow().tabs.active; close_tab(shared, i); }
-        "u" => undo_close(shared),
-        "J" => { let i = shared.borrow().tabs.neighbour(1); goto_tab(shared, i); }
-        "K" => { let i = shared.borrow().tabs.neighbour(-1); goto_tab(shared, i); }
-        "g0" => goto_visible(shared, 0),
-        "g$" => { let n = shared.borrow().tabs.visible_indices().len(); goto_visible(shared, n.saturating_sub(1)); }
-        "f" => start_hints(shared, false),
-        "F" => start_hints(shared, true),
-        "i" => { set_mode(shared, Mode::Insert); with_view(shared, |v| { v.grab_focus(); }); }
-        "gi" => with_view(shared, |v| run_js(v, "window.__gaze && window.__gaze.focusFirstInput()")),
-        "yy" => { clipboard().set_text(&uri); set_message(shared, &format!("Yanked {}", uri)); }
-        "yt" => {
-            let t = shared.borrow().tabs.current().map(|t| t.title.clone()).unwrap_or_default();
-            clipboard().set_text(&t);
-            set_message(shared, &format!("Yanked {}", t));
+    let (exact, more) = shared.borrow().keymap.lookup(&seq);
+    match exact {
+        Some(cmd) => {
+            shared.borrow_mut().keys.clear();
+            refresh(shared);
+            run_command(shared, &cmd);
         }
-        "pp" => paste_and_open(shared, false),
-        "PP" => paste_and_open(shared, true),
-        "+" => zoom(shared, 0.1),
-        "-" => zoom(shared, -0.1),
-        "=" => { let z = shared.borrow().cfg.zoom; with_view(shared, |v| v.set_zoom_level(z)); set_message(shared, "Zoom reset"); }
-        "zc" => fold_current(shared, Some(true)),
-        "zo" => fold_current(shared, Some(false)),
-        "za" => fold_current(shared, None),
-        "zM" => { shared.borrow_mut().tabs.collapse_all(true); refresh(shared); save_session(shared); }
-        "zR" => { shared.borrow_mut().tabs.collapse_all(false); refresh(shared); save_session(shared); }
-        "gp" => fill_next(shared, false),
-        "ZZ" => quit(shared),
-        "?" => { open_tab(shared, "gaze://help", false); }
-        _ => {}
+        None if more => refresh(shared),
+        None => {
+            shared.borrow_mut().keys.clear();
+            refresh(shared);
+        }
     }
-    shared.borrow_mut().keys.clear();
-    refresh(shared);
 }
 
 /// Run `f` on the current view with no borrow of the app held: a call
@@ -911,27 +891,71 @@ fn find(shared: &Shared, text: &str) {
 }
 
 fn run_command(shared: &Shared, line: &str) {
-    let line = line.trim();
-    if line.is_empty() { return; }
-    let (cmd, arg) = line.split_once(char::is_whitespace).map(|(c, a)| (c, a.trim())).unwrap_or((line, ""));
-    let search = shared.borrow().cfg.search.clone();
+    let line = line.trim_start();
+    if line.trim().is_empty() { return; }
+    let (cmd, rest) = line.split_once(' ').unwrap_or((line, ""));
+    let (cmd, arg) = (cmd.trim(), rest.trim());
+    let (search, step, uri, title) = {
+        let a = shared.borrow();
+        let t = a.tabs.current();
+        (a.cfg.search.clone(), a.cfg.scroll_step as f64,
+         t.map(|t| t.uri.clone()).unwrap_or_default(), t.map(|t| t.title.clone()).unwrap_or_default())
+    };
     match cmd {
-        "open" | "o" => { let uri = config::to_uri(arg, &search); with_view(shared, |v| v.load_uri(&uri)); }
-        "tabopen" | "t" => { let uri = config::to_uri(arg, &search); open_tab(shared, &uri, false); }
+        "cmd" => begin_ask(shared, Ask::Command, &rest.trim_start().replace("{url}", &uri).replace("{title}", &title)),
+        "open" | "o" => {
+            if arg.is_empty() { begin_ask(shared, Ask::Command, "open "); }
+            else { let u = config::to_uri(arg, &search); with_view(shared, |v| v.load_uri(&u)); }
+        }
+        "tabopen" | "t" => {
+            if arg.is_empty() { begin_ask(shared, Ask::Command, "tabopen "); }
+            else { open_tab(shared, &config::to_uri(arg, &search), false); }
+        }
         "home" => { let h = shared.borrow().cfg.home.clone(); with_view(shared, |v| v.load_uri(&h)); }
         "back" => with_view(shared, |v| v.go_back()),
         "forward" => with_view(shared, |v| v.go_forward()),
         "reload" => with_view(shared, |v| v.reload()),
+        "reload-force" => with_view(shared, |v| v.reload_bypass_cache()),
         "stop" => with_view(shared, |v| v.stop_loading()),
-        "close" | "q" => { let i = shared.borrow().tabs.active; close_tab(shared, i); }
-        "quit" | "qa" | "wq" => quit(shared),
-        "undo" => undo_close(shared),
-        "tab" => {
-            match arg.parse::<usize>() {
-                Ok(n) if n >= 1 => goto_visible(shared, n - 1),
-                _ => set_message(shared, "tab <number>"),
-            }
+        "scroll-down" => scroll_by(shared, 0, step),
+        "scroll-up" => scroll_by(shared, 0, -step),
+        "scroll-left" => scroll_by(shared, -(step as i32), 0.0),
+        "scroll-right" => scroll_by(shared, step as i32, 0.0),
+        "scroll-page" => match arg.parse::<f64>() {
+            Ok(share) => scroll_page(shared, share),
+            Err(_) => set_message(shared, "scroll-page <share of the window>, 0.5 is half a page down"),
+        },
+        "scroll-top" => with_view(shared, |v| run_js(v, js::SCROLL_TOP)),
+        "scroll-bottom" => with_view(shared, |v| run_js(v, js::SCROLL_BOTTOM)),
+        "find" => { if arg.is_empty() { begin_ask(shared, Ask::Find, ""); } else { find(shared, arg); } }
+        "find-next" => with_find(shared, |f| f.search_next()),
+        "find-prev" => with_find(shared, |f| f.search_previous()),
+        "hint" => start_hints(shared, false),
+        "hint-tab" => start_hints(shared, true),
+        "insert" => { set_mode(shared, Mode::Insert); with_view(shared, |v| { v.grab_focus(); }); }
+        "focus-input" => with_view(shared, |v| run_js(v, "window.__gaze && window.__gaze.focusFirstInput()")),
+        "yank" => {
+            let text = if arg == "title" { title } else { uri };
+            clipboard().set_text(&text);
+            set_message(shared, &format!("Yanked {}", text));
         }
+        "paste" => paste_and_open(shared, false),
+        "paste-tab" => paste_and_open(shared, true),
+        "zoom-in" => zoom(shared, 0.1),
+        "zoom-out" => zoom(shared, -0.1),
+        "zoom-reset" => { let z = shared.borrow().cfg.zoom; with_view(shared, |v| v.set_zoom_level(z)); set_message(shared, "Zoom reset"); }
+        "zoom" => match arg.trim_end_matches('%').parse::<f64>() {
+            Ok(p) if p > 0.0 => { with_view(shared, |v| v.set_zoom_level(p / 100.0)); set_message(shared, &format!("Zoom {:.0}%", p)); }
+            _ => set_message(shared, "zoom <percent>"),
+        },
+        "tab-next" => { let i = shared.borrow().tabs.neighbour(1); goto_tab(shared, i); }
+        "tab-prev" => { let i = shared.borrow().tabs.neighbour(-1); goto_tab(shared, i); }
+        "tab-first" => goto_visible(shared, 0),
+        "tab-last" => { let n = shared.borrow().tabs.visible_indices().len(); goto_visible(shared, n.saturating_sub(1)); }
+        "tab" => match arg.parse::<usize>() {
+            Ok(n) if n >= 1 => goto_visible(shared, n - 1),
+            _ => set_message(shared, "tab <number>"),
+        },
         "tab-move" => {
             let (idx, len) = { let a = shared.borrow(); (a.tabs.active, a.tabs.len()) };
             let delta = match arg {
@@ -943,15 +967,20 @@ fn run_command(shared: &Shared, line: &str) {
                 None => set_message(shared, "tab-move +1 | -1 | <number>"),
             }
         }
-        "group" => {
-            if arg.is_empty() { begin_ask(shared, Ask::GroupName, ""); } else { group_current(shared, arg); }
-        }
+        "close" | "q" => { let i = shared.borrow().tabs.active; close_tab(shared, i); }
+        "undo" => undo_close(shared),
+        "group" => { if arg.is_empty() { begin_ask(shared, Ask::GroupName, ""); } else { group_current(shared, arg); } }
         "ungroup" => {
             let i = shared.borrow().tabs.active;
             shared.borrow_mut().tabs.ungroup(i);
             refresh(shared);
             save_session(shared);
         }
+        "group-fold" => fold_current(shared, Some(true)),
+        "group-unfold" => fold_current(shared, Some(false)),
+        "group-toggle" => fold_current(shared, None),
+        "groups-fold" => { shared.borrow_mut().tabs.collapse_all(true); refresh(shared); save_session(shared); }
+        "groups-unfold" => { shared.borrow_mut().tabs.collapse_all(false); refresh(shared); save_session(shared); }
         "group-rename" | "group-color" | "group-close" | "group-collapse" | "group-expand" => group_command(shared, cmd, arg),
         "groups" => {
             let text = {
@@ -961,13 +990,37 @@ fn run_command(shared: &Shared, line: &str) {
             };
             set_message(shared, if text.is_empty() { "No groups" } else { &text });
         }
-        "zoom" => {
-            match arg.trim_end_matches('%').parse::<f64>() {
-                Ok(p) if p > 0.0 => { with_view(shared, |v| v.set_zoom_level(p / 100.0)); set_message(shared, &format!("Zoom {:.0}%", p)); }
-                _ => set_message(shared, "zoom <percent>"),
+        "bookmark-add" => {
+            if uri.is_empty() || uri.starts_with("about:") || uri.starts_with("gaze:") { set_message(shared, "Nothing to bookmark here"); return; }
+            let name = if arg.is_empty() { title } else { arg.to_string() };
+            let r = shared.borrow_mut().marks.add(&uri, &name);
+            match r {
+                Ok(true) => set_message(shared, &format!("Bookmarked {}", name)),
+                Ok(false) => set_message(shared, "Already bookmarked; title updated"),
+                Err(e) => set_message(shared, &format!("Bookmarks: {}", e)),
             }
         }
-        "find" => find(shared, arg),
+        "bookmark-del" => {
+            let target = if arg.is_empty() { uri } else { arg.to_string() };
+            let r = shared.borrow_mut().marks.remove(&target);
+            match r {
+                Ok(true) => set_message(shared, "Bookmark removed"),
+                Ok(false) => set_message(shared, "Not a bookmark"),
+                Err(e) => set_message(shared, &format!("Bookmarks: {}", e)),
+            }
+        }
+        "bookmarks" => { open_tab(shared, "gaze://bookmarks", false); }
+        "bookmark-import" => {
+            if arg.is_empty() { set_message(shared, "bookmark-import <bookmarks.html> (Firefox: Manage Bookmarks → Import and Backup → Export)"); return; }
+            let path = config::expand(arg);
+            let r = std::fs::read_to_string(&path).map_err(|e| e.to_string())
+                .and_then(|html| shared.borrow_mut().marks.import_html(&html));
+            match r {
+                Ok(n) => set_message(shared, &format!("Imported {} bookmarks", n)),
+                Err(e) => set_message(shared, &format!("Import failed: {}", e)),
+            }
+        }
+        "fill" => fill_next(shared, false),
         "passwords" => when_unlocked(shared, Then::List),
         "password-import" => {
             if arg.is_empty() { set_message(shared, "password-import <file.csv> (Firefox: about:logins → Export)"); }
@@ -978,9 +1031,28 @@ fn run_command(shared: &Shared, line: &str) {
             else { when_unlocked(shared, Then::Remove(arg.to_string())); }
         }
         "password-lock" => { shared.borrow_mut().store.lock(); set_message(shared, "Passwords locked"); }
+        "adblock-update" => adblock_download(shared),
+        "bind" => {
+            let Some((k, c)) = arg.split_once(' ') else { set_message(shared, "bind <keys> <command>"); return };
+            let r = shared.borrow_mut().keymap.bind(k.trim(), c.trim());
+            match r {
+                Ok(()) => set_message(shared, &format!("{} runs {}", k.trim(), c.trim())),
+                Err(e) => set_message(shared, &e),
+            }
+        }
+        "unbind" => {
+            if arg.is_empty() { set_message(shared, "unbind <keys>"); return; }
+            let r = shared.borrow_mut().keymap.unbind(arg);
+            match r {
+                Ok(true) => set_message(shared, &format!("{} unbound", arg)),
+                Ok(false) => set_message(shared, &format!("{} was not bound", arg)),
+                Err(e) => set_message(shared, &e),
+            }
+        }
         "help" => { open_tab(shared, "gaze://help", false); }
         "inspect" | "devtools" => with_view(shared, |v| { if let Some(i) = v.inspector() { i.show(); } }),
         "session-save" => { save_session(shared); set_message(shared, "Session saved"); }
+        "quit" | "qa" | "wq" => quit(shared),
         _ => set_message(shared, &format!("Unknown command: {}", cmd)),
     }
 }
@@ -1199,14 +1271,93 @@ fn on_message(shared: &Shared, id: u64, text: &str) {
     }
 }
 
+// ------------------------------------------------------------- ad block
+
+thread_local! {
+    static SOUP: soup::Session = soup::Session::new();
+}
+
+fn adblock_dir() -> PathBuf { config::gaze_dir().join("adblock") }
+
+fn adblock_store() -> UserContentFilterStore {
+    let dir = adblock_dir().join("store");
+    let _ = std::fs::create_dir_all(&dir);
+    UserContentFilterStore::new(&dir.to_string_lossy())
+}
+
+/// At start: use the compiled filter when there is one, else build it
+/// from the hosts list, fetching the list first when it is missing.
+fn adblock_start(shared: &Shared) {
+    if !shared.borrow().cfg.adblock { return; }
+    let s = shared.clone();
+    adblock_store().load("ads", None::<&gio::Cancellable>, move |r| match r {
+        Ok(filter) => apply_filter(&s, filter, None),
+        Err(_) => {
+            if adblock_dir().join("hosts").exists() { adblock_compile(&s); } else { adblock_download(&s); }
+        }
+    });
+}
+
+fn adblock_download(shared: &Shared) {
+    let msg = match soup::Message::new("GET", adblock::SOURCE) {
+        Ok(m) => m,
+        Err(e) => { set_message(shared, &format!("Ad blocker: {}", e)); return; }
+    };
+    set_message(shared, "Ad blocker: fetching the hosts list…");
+    let s = shared.clone();
+    SOUP.with(|session| {
+        session.send_and_read_async(&msg, glib::Priority::DEFAULT, None::<&gio::Cancellable>, move |r| match r {
+            Ok(bytes) if bytes.len() > 10_000 => {
+                let _ = std::fs::create_dir_all(adblock_dir());
+                match std::fs::write(adblock_dir().join("hosts"), &bytes) {
+                    Ok(()) => adblock_compile(&s),
+                    Err(e) => set_message(&s, &format!("Ad blocker: {}", e)),
+                }
+            }
+            Ok(_) => set_message(&s, "Ad blocker: the hosts list came back empty"),
+            Err(e) => set_message(&s, &format!("Ad blocker: {}", e)),
+        });
+    });
+}
+
+/// Turn the hosts list into a content filter. WebKit compiles it on a
+/// thread of its own and keeps the result, so this runs once per list.
+fn adblock_compile(shared: &Shared) {
+    let text = match std::fs::read_to_string(adblock_dir().join("hosts")) {
+        Ok(t) => t,
+        Err(e) => { set_message(shared, &format!("Ad blocker: {}", e)); return; }
+    };
+    let (json, n) = adblock::rules_from_hosts(&text);
+    set_message(shared, &format!("Ad blocker: compiling {} domains…", n));
+    let bytes = glib::Bytes::from_owned(json.into_bytes());
+    let s = shared.clone();
+    adblock_store().save("ads", &bytes, None::<&gio::Cancellable>, move |r| match r {
+        Ok(filter) => apply_filter(&s, filter, Some(n)),
+        Err(e) => set_message(&s, &format!("Ad blocker: {}", e)),
+    });
+}
+
+fn apply_filter(shared: &Shared, filter: UserContentFilter, count: Option<usize>) {
+    let views: Vec<WebView> = shared.borrow().views.values().cloned().collect();
+    for v in &views {
+        if let Some(ucm) = v.user_content_manager() {
+            ucm.remove_all_filters();
+            ucm.add_filter(&filter);
+        }
+    }
+    shared.borrow_mut().filter = Some(filter);
+    if let Some(n) = count { set_message(shared, &format!("Ad blocker ready: {} domains blocked", n)); }
+}
+
 // -------------------------------------------------------- gaze:// pages
 
 fn serve_internal(req: &URISchemeRequest) {
     let uri = req.uri().map(|u| u.to_string()).unwrap_or_default();
     let name = uri.trim_start_matches("gaze:").trim_matches('/').to_string();
     let body = match name.as_str() {
-        "help" => HELP.to_string(),
+        "help" => help_page(),
         "passwords" => passwords_page(),
+        "bookmarks" => bookmarks_page(),
         other => format!("<h1>gaze://{}</h1><p>No such page. Try gaze://help.</p>", esc(other)),
     };
     let html = format!("<!doctype html><meta charset=utf-8><title>gaze</title><style>{}</style>{}", PAGE_CSS, body);
@@ -1238,48 +1389,98 @@ fn passwords_page() -> String {
 
 const PAGE_CSS: &str = "body{background:#1e1e1e;color:#d0d0d0;font:15px/1.5 sans-serif;max-width:56em;margin:2em auto;padding:0 1em}\
  h1{color:#f0883e}h2{color:#e0b93a;margin-top:1.6em}code,kbd{font-family:monospace;background:#2c2c2c;padding:1px 5px;border-radius:3px;color:#fff}\
- table{border-collapse:collapse}td,th{text-align:left;padding:3px 14px 3px 0;vertical-align:top}th{color:#e0b93a}";
+ table{border-collapse:collapse}td,th{text-align:left;padding:3px 14px 3px 0;vertical-align:top}th{color:#e0b93a;padding-top:1.2em}\
+ a{color:#7ab7ff;text-decoration:none}a:hover{text-decoration:underline}.u{color:#8a8a8a;font-size:13px}";
 
-const HELP: &str = r#"<h1>gaze</h1>
-<p>Looking out onto the web. Keys work like qutebrowser and vim; <kbd>Esc</kbd> always returns to normal mode.</p>
-<h2>Pages</h2>
-<table>
-<tr><td><kbd>o</kbd> / <kbd>O</kbd></td><td>open a URL or search here / in a new tab (<kbd>go</kbd>, <kbd>gO</kbd> start from the current URL)</td></tr>
-<tr><td><kbd>f</kbd> / <kbd>F</kbd></td><td>hints: type the letters on a link to follow it / open it in a background tab</td></tr>
-<tr><td><kbd>H</kbd> / <kbd>L</kbd></td><td>back / forward</td></tr>
-<tr><td><kbd>r</kbd> / <kbd>R</kbd></td><td>reload / reload without the cache</td></tr>
-<tr><td><kbd>j k h l</kbd>, <kbd>gg</kbd>, <kbd>G</kbd>, <kbd>Ctrl-d</kbd> / <kbd>Ctrl-u</kbd>, <kbd>Space</kbd></td><td>scroll</td></tr>
-<tr><td><kbd>/</kbd>, <kbd>n</kbd> / <kbd>N</kbd></td><td>find on the page, next / previous</td></tr>
-<tr><td><kbd>i</kbd>, <kbd>gi</kbd></td><td>insert mode (type into the page) / focus the first field</td></tr>
-<tr><td><kbd>yy</kbd>, <kbd>yt</kbd></td><td>copy the URL / the title</td></tr>
-<tr><td><kbd>pp</kbd> / <kbd>PP</kbd></td><td>open what the clipboard holds here / in a new tab</td></tr>
-<tr><td><kbd>+</kbd> <kbd>-</kbd> <kbd>=</kbd></td><td>zoom in, out, reset</td></tr>
-</table>
-<h2>Tabs</h2>
-<table>
-<tr><td><kbd>t</kbd></td><td>new tab</td></tr>
-<tr><td><kbd>J</kbd> / <kbd>K</kbd>, <kbd>Alt-1</kbd>…<kbd>Alt-9</kbd>, <kbd>g0</kbd>, <kbd>g$</kbd></td><td>next / previous, by number, first, last</td></tr>
-<tr><td><kbd>d</kbd> / <kbd>u</kbd></td><td>close / bring back the last closed</td></tr>
-<tr><td><code>:tab-move +1</code>, <code>:tab-move 3</code></td><td>move the tab</td></tr>
-</table>
+fn bookmarks_page() -> String {
+    let rows = with_app(|s| {
+        let a = s.borrow();
+        a.marks.list().iter().map(|b| {
+            let title = if b.title.is_empty() { b.url.clone() } else { b.title.clone() };
+            format!("<tr><td><a href=\"{}\">{}</a></td><td class=u>{}</td></tr>", esc(&b.url), esc(&title), esc(&b.url))
+        }).collect::<String>()
+    }).unwrap_or_default();
+    if rows.is_empty() {
+        return "<h1>Bookmarks</h1><p>None yet. <kbd>M</kbd> bookmarks the page you are on; \
+                <code>:bookmark-import ~/bookmarks.html</code> reads a Firefox export.</p>".to_string();
+    }
+    format!("<h1>Bookmarks</h1><p><kbd>f</kbd> then the letters opens one. <kbd>M</kbd> adds the current page, \
+             <code>:bookmark-del</code> removes it. The list is <code>~/.gaze/bookmarks</code>, a text file.</p>\
+             <table>{}</table>", rows)
+}
+
+/// Every command, grouped, for the help page. Keys come from the keymap.
+const COMMANDS: &[(&str, &str, &str)] = &[
+    ("Pages", "open [url]", "open a URL, a search or a file here; asks when given nothing"),
+    ("Pages", "tabopen [url]", "the same in a new tab"),
+    ("Pages", "cmd <text>", "open the command line with this text; {url} and {title} are filled in"),
+    ("Pages", "back", "go back"), ("Pages", "forward", "go forward"),
+    ("Pages", "reload", "reload"), ("Pages", "reload-force", "reload without the cache"), ("Pages", "stop", "stop loading"),
+    ("Pages", "home", "the home page from config.yml"),
+    ("Pages", "hint", "type the letters on a link to follow it"), ("Pages", "hint-tab", "the same, into a background tab"),
+    ("Pages", "insert", "insert mode: keys go to the page until Esc"), ("Pages", "focus-input", "focus the first field on the page"),
+    ("Pages", "scroll-down", "scroll"), ("Pages", "scroll-up", ""), ("Pages", "scroll-left", ""), ("Pages", "scroll-right", ""),
+    ("Pages", "scroll-page <share>", "scroll by a share of the window; 0.5 is half a page down, -0.5 up"),
+    ("Pages", "scroll-top", "to the top"), ("Pages", "scroll-bottom", "to the bottom"),
+    ("Pages", "find [text]", "find on the page; asks when given nothing"), ("Pages", "find-next", ""), ("Pages", "find-prev", ""),
+    ("Pages", "yank url|title", "copy to the clipboard"), ("Pages", "paste", "open what the clipboard holds here"), ("Pages", "paste-tab", "the same in a new tab"),
+    ("Pages", "zoom-in", ""), ("Pages", "zoom-out", ""), ("Pages", "zoom-reset", ""), ("Pages", "zoom <percent>", ""),
+    ("Tabs", "tab-next", "the next visible tab"), ("Tabs", "tab-prev", "the previous one"),
+    ("Tabs", "tab <n>", "the n-th visible tab"), ("Tabs", "tab-first", ""), ("Tabs", "tab-last", ""),
+    ("Tabs", "tab-move +1|-1|<n>", "move this tab"), ("Tabs", "close", "close this tab"), ("Tabs", "undo", "bring back the last closed tab"),
+    ("Tab groups", "group [name]", "put this tab in the group, made on the spot when new; asks for the name when given none"),
+    ("Tab groups", "ungroup", "take it out again"),
+    ("Tab groups", "group-fold", "fold this tab's group away"), ("Tab groups", "group-unfold", ""), ("Tab groups", "group-toggle", ""),
+    ("Tab groups", "groups-fold", "fold every group"), ("Tab groups", "groups-unfold", ""),
+    ("Tab groups", "group-rename <name>", ""), ("Tab groups", "group-color <colour>", "blue red yellow green pink purple orange cyan gray"),
+    ("Tab groups", "group-close", "close every tab of the group"), ("Tab groups", "groups", "list the groups"),
+    ("Bookmarks", "bookmark-add [title]", "bookmark this page"), ("Bookmarks", "bookmark-del [url]", "forget this page's bookmark"),
+    ("Bookmarks", "bookmarks", "the list, at gaze://bookmarks"), ("Bookmarks", "bookmark-import <file>", "read a Firefox HTML export"),
+    ("Passwords", "fill", "fill the login form; again for the next saved login of the site"),
+    ("Passwords", "passwords", "list the sites and usernames"), ("Passwords", "password-import <csv>", "read the CSV Firefox writes from about:logins → Export"),
+    ("Passwords", "password-remove <username>", "forget one login for this site"), ("Passwords", "password-lock", "lock the store for this session"),
+    ("Other", "bind <keys> <command>", "bind keys; kept in ~/.gaze/keys.yml"), ("Other", "unbind <keys>", ""),
+    ("Other", "adblock-update", "fetch the hosts list again and rebuild the ad blocker"),
+    ("Other", "help", "this page"), ("Other", "inspect", "the web inspector"), ("Other", "session-save", ""), ("Other", "quit", ""),
+];
+
+fn help_page() -> String {
+    let table = with_app(|s| {
+        let a = s.borrow();
+        let mut out = String::new();
+        let mut group = "";
+        for (g, cmd, what) in COMMANDS {
+            if *g != group {
+                group = g;
+                out.push_str(&format!("<tr><th colspan=3>{}</th></tr>", g));
+            }
+            let word = cmd.split_whitespace().next().unwrap_or(cmd);
+            let keys = a.keymap.keys_for(word).iter().map(|k| format!("<kbd>{}</kbd>", esc(k))).collect::<Vec<_>>().join(" ");
+            out.push_str(&format!("<tr><td>{}</td><td><code>{}</code></td><td>{}</td></tr>", keys, esc(cmd), esc(what)));
+        }
+        out
+    }).unwrap_or_default();
+    format!(r#"<h1>gaze</h1>
+<p>Looking out onto the web. <kbd>Esc</kbd> always returns to normal mode; <kbd>:</kbd> opens the command line.
+Every key runs a command from the table; <code>:bind &lt;keys&gt; &lt;command&gt;</code> changes one and
+<code>~/.gaze/keys.yml</code> keeps the change. Key names: plain characters as they are, else
+<code>&lt;Ctrl-d&gt;</code>, <code>&lt;Alt-1&gt;</code>, <code>&lt;Shift-Left&gt;</code>, <code>&lt;Space&gt;</code>.</p>
+<table>{}</table>
 <h2>Tab groups</h2>
-<p>A group is a named, coloured run of tabs, as in Firefox. A new tab opened from a grouped tab joins the group.</p>
-<table>
-<tr><td><code>:group &lt;name&gt;</code></td><td>put this tab in the group (made on the spot when new)</td></tr>
-<tr><td><code>:ungroup</code></td><td>take it out again</td></tr>
-<tr><td><kbd>zc</kbd> / <kbd>zo</kbd> / <kbd>za</kbd></td><td>fold / unfold / toggle this tab's group; <kbd>zM</kbd> and <kbd>zR</kbd> do all groups</td></tr>
-<tr><td><code>:group-rename</code>, <code>:group-color</code>, <code>:group-close</code>, <code>:groups</code></td><td>rename, recolour (blue red yellow green pink purple orange cyan gray), close all its tabs, list the groups</td></tr>
-</table>
+<p>A group is a named, coloured run of tabs, as in Firefox. A tab opened from a grouped tab joins the group.
+A folded group shows as its name and a count; its tabs are skipped until it is unfolded.
+Groups come back with the session at the next start.</p>
 <h2>Passwords</h2>
-<p>Logins live in <code>~/.gaze/passwords</code>, sealed with a master password you choose the first time. A login form gets filled when the page loads.</p>
-<table>
-<tr><td><kbd>gp</kbd></td><td>unlock and fill; press again for the next saved login of the site</td></tr>
-<tr><td>after logging in</td><td>gaze asks whether to save a new or changed password</td></tr>
-<tr><td><code>:passwords</code></td><td>list the sites and usernames</td></tr>
-<tr><td><code>:password-import ~/logins.csv</code></td><td>import the CSV that Firefox writes from about:logins → Export Logins</td></tr>
-<tr><td><code>:password-remove &lt;username&gt;</code>, <code>:password-lock</code></td><td>forget one login for this site; lock the store for this session</td></tr>
-</table>
-<h2>Commands</h2>
-<p><kbd>:</kbd> opens the command line. <code>open</code>, <code>tabopen</code>, <code>home</code>, <code>back</code>, <code>forward</code>, <code>reload</code>, <code>stop</code>, <code>close</code>, <code>undo</code>, <code>tab</code>, <code>zoom 120</code>, <code>find</code>, <code>inspect</code>, <code>session-save</code>, <code>quit</code>.</p>
-<p>Settings live in <code>~/.gaze/config.yml</code>: home page, search engine, download folder, zoom, scroll step.</p>
-"#;
+<p>Logins live in <code>~/.gaze/passwords</code>, sealed with a master password you choose the first time.
+A login form is filled when the page loads; after a sign-in with a new or changed password gaze asks whether to save it.
+A site's HTTP password dialog is answered from the store too, when it is open.</p>
+<h2>Ad blocking</h2>
+<p>On by default (<code>adblock: false</code> in config.yml turns it off). The first start fetches Steven Black's hosts list
+to <code>~/.gaze/adblock/hosts</code> and compiles it into a WebKit content filter; every domain on the list is blocked.
+<code>:adblock-update</code> fetches it again.</p>
+<h2>Files</h2>
+<p><code>~/.gaze/config.yml</code>: home page, search engine, download folder, zoom, scroll step, ad blocking.
+<code>~/.gaze/keys.yml</code>: your key changes. <code>~/.gaze/bookmarks</code>: one per line.
+<code>~/.gaze/session.json</code>: the open tabs and groups.</p>
+"#, table)
+}

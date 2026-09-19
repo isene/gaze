@@ -16,6 +16,8 @@ pub struct Config {
     pub zoom: f64,
     /// Lines the page scrolls for j and k, in pixels.
     pub scroll_step: i32,
+    /// Block the domains of Steven Black's hosts list.
+    pub adblock: bool,
 }
 
 impl Default for Config {
@@ -26,6 +28,7 @@ impl Default for Config {
             downloads: "~/Downloads".into(),
             zoom: 1.0,
             scroll_step: 80,
+            adblock: true,
         }
     }
 }
@@ -37,6 +40,7 @@ search: https://duckduckgo.com/?q=%s
 downloads: ~/Downloads
 zoom: 1.0
 scroll_step: 80
+adblock: true
 ";
 
 pub fn home_dir() -> PathBuf {
