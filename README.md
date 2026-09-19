@@ -31,7 +31,7 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 | `:` | Command line |
 | `Q`, `ZZ` | Quit |
 
-`:bind <keys> <command>` changes a binding from the command line and `:unbind <keys>` drops one. The changes go to `~/.gaze/keys.yml`, which you can also edit by hand. Key names follow qutebrowser: plain characters as they are, else `<Ctrl-d>`, `<Alt-1>`, `<Shift-Left>`, `<Space>`, `<Backspace>`.
+`Tab` completes on the command line: command names, then group names after `:group` and colours after `:group-color`. `:bind <keys> <command>` changes a binding from the command line and `:unbind <keys>` drops one. The changes go to `~/.gaze/keys.yml`, which you can also edit by hand. Key names follow qutebrowser: plain characters as they are, else `<Ctrl-d>`, `<Alt-1>`, `<Shift-Left>`, `<Space>`, `<Backspace>`.
 
 ## Tab groups
 

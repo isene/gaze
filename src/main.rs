@@ -78,8 +78,8 @@ struct App {
     keymap: keys::Keymap,
     marks: bookmarks::Bookmarks,
     hist: history::History,
-    /// What the open prompt offers right now, and which one Tab picked.
-    candidates: Vec<history::Candidate>,
+    /// What the command line offers right now, and which one Tab picked.
+    offers: Vec<Offer>,
     selected: Option<usize>,
     /// True while gaze itself writes the command line, so the write does
     /// not count as typing.
@@ -99,6 +99,17 @@ fn with_app<R>(f: impl FnOnce(&Shared) -> R) -> Option<R> {
 }
 
 fn main() {
+    // A panic ends up in ~/.gaze/crash.log as well as on stderr, since
+    // gaze is mostly started without a terminal.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        use std::io::Write;
+        let when = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open(config::gaze_dir().join("crash.log")) {
+            let _ = writeln!(f, "{} gaze {}: {}", when, env!("CARGO_PKG_VERSION"), info);
+        }
+        default_hook(info);
+    }));
     let app = gtk::Application::builder()
         .application_id("org.isene.gaze")
         .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)
@@ -212,7 +223,7 @@ fn build(app: &gtk::Application) -> Shared {
         mode: Mode::Normal, keys: String::new(), ask: Ask::Command, prompt: None,
         message: String::new(), hover: String::new(), store, fill_at: HashMap::new(),
         closed: Vec::new(), find: String::new(), session_path, save_pending: false,
-        keymap, marks, hist, candidates: Vec::new(), selected: None, setting_text: false, filter: None,
+        keymap, marks, hist, offers: Vec::new(), selected: None, setting_text: false, filter: None,
     }));
 
     let keys = gtk::EventControllerKey::new();
@@ -889,7 +900,7 @@ fn end_ask(shared: &Shared) {
     let (entry, completion) = {
         let mut a = shared.borrow_mut();
         a.mode = Mode::Normal;
-        a.candidates.clear();
+        a.offers.clear();
         a.selected = None;
         (a.ui.entry.clone(), a.ui.completion.clone())
     };
@@ -924,29 +935,67 @@ fn entry_done(shared: &Shared) {
     }
 }
 
+/// One row of the completion: what goes on the command line when it
+/// is picked, and the two columns shown.
+#[derive(Clone, Debug)]
+struct Offer {
+    line: String,
+    left: String,
+    right: String,
+    mark: &'static str,
+}
+
 /// The verb and the query of an open prompt, or None for any other text.
 fn open_query(text: &str) -> Option<(&str, &str)> {
     let (verb, rest) = text.split_once(' ')?;
     if matches!(verb, "open" | "o" | "tabopen" | "t") { Some((verb, rest)) } else { None }
 }
 
+/// What the command line can offer for `text`: pages for an open prompt,
+/// command names before the first space, group and colour names after
+/// the commands that take them.
+fn offers_for(a: &App, text: &str) -> Vec<Offer> {
+    if let Some((verb, query)) = open_query(text) {
+        let marks: Vec<(String, String)> = a.marks.list().iter().map(|b| (b.url.clone(), b.title.clone())).collect();
+        return a.hist.matches(query, &marks, 10).into_iter().map(|c| Offer {
+            line: format!("{} {}", verb, c.url), left: c.title, right: c.url, mark: if c.bookmark { "★" } else { " " },
+        }).collect();
+    }
+    match text.split_once(' ') {
+        None => {
+            if text.is_empty() { return Vec::new(); }
+            let mut seen = Vec::new();
+            COMMANDS.iter().filter_map(|(_, cmd, what)| {
+                let name = cmd.split_whitespace().next()?;
+                if !name.starts_with(text) || seen.contains(&name) { return None; }
+                seen.push(name);
+                Some(Offer { line: format!("{} ", name), left: cmd.to_string(), right: what.to_string(), mark: " " })
+            }).take(12).collect()
+        }
+        Some((cmd, arg)) => match cmd {
+            "group" | "group-collapse" | "group-expand" | "group-delete" => {
+                a.tabs.groups.iter().filter(|g| g.name.to_lowercase().starts_with(&arg.to_lowercase())).map(|g| Offer {
+                    line: format!("{} {}", cmd, g.name), left: g.name.clone(),
+                    right: format!("{} tabs, {}", a.tabs.tabs_in(g.id).len(), g.color), mark: " ",
+                }).collect()
+            }
+            "group-color" => tabs::COLORS.iter().filter(|(n, _)| n.starts_with(arg)).map(|(n, hex)| Offer {
+                line: format!("{} {}", cmd, n), left: n.to_string(), right: hex.to_string(), mark: " ",
+            }).collect(),
+            _ => Vec::new(),
+        },
+    }
+}
+
 fn on_entry_changed(shared: &Shared) {
-    let text = {
+    let offers = {
         let a = shared.borrow();
         if a.setting_text || a.mode != Mode::Command || !matches!(a.ask, Ask::Command) { return; }
-        a.ui.entry.text().to_string()
-    };
-    let candidates = match open_query(&text) {
-        Some((_, query)) => {
-            let a = shared.borrow();
-            let marks: Vec<(String, String)> = a.marks.list().iter().map(|b| (b.url.clone(), b.title.clone())).collect();
-            a.hist.matches(query, &marks, 10)
-        }
-        None => Vec::new(),
+        offers_for(&a, &a.ui.entry.text())
     };
     {
         let mut a = shared.borrow_mut();
-        a.candidates = candidates;
+        a.offers = offers;
         a.selected = None;
     }
     render_completion(shared);
@@ -955,11 +1004,10 @@ fn on_entry_changed(shared: &Shared) {
 fn render_completion(shared: &Shared) {
     let (label, markup) = {
         let a = shared.borrow();
-        let lines: Vec<String> = a.candidates.iter().enumerate().map(|(i, c)| {
-            let title: String = c.title.chars().take(48).collect();
-            let url: String = c.url.chars().take(90).collect();
-            let line = format!("{} {:<48}  {}", if c.bookmark { "★" } else { " " }, title, url);
-            let text = glib::markup_escape_text(&line);
+        let lines: Vec<String> = a.offers.iter().enumerate().map(|(i, o)| {
+            let left: String = o.left.chars().take(48).collect();
+            let right: String = o.right.chars().take(90).collect();
+            let text = glib::markup_escape_text(&format!("{} {:<48}  {}", o.mark, left, right));
             if a.selected == Some(i) {
                 format!("<span background=\"#e6e6e6\" foreground=\"#1e1e1e\">{}</span>", text)
             } else {
@@ -976,11 +1024,12 @@ fn render_completion(shared: &Shared) {
     }
 }
 
-/// Tab and Shift-Tab walk the offered pages and put one on the command line.
+/// Tab and Shift-Tab walk the offers and put one on the command line. A
+/// command picked this way ends in a space, and its arguments are offered next.
 fn complete_move(shared: &Shared, dir: i32) {
     let (entry, text) = {
         let mut a = shared.borrow_mut();
-        let n = a.candidates.len();
+        let n = a.offers.len();
         if n == 0 { return; }
         let next = match a.selected {
             Some(i) => ((i as i32 + dir).rem_euclid(n as i32)) as usize,
@@ -988,14 +1037,13 @@ fn complete_move(shared: &Shared, dir: i32) {
             None => n - 1,
         };
         a.selected = Some(next);
-        let verb = open_query(&a.ui.entry.text()).map(|(v, _)| v).unwrap_or("open").to_string();
         a.setting_text = true;
-        (a.ui.entry.clone(), format!("{} {}", verb, a.candidates[next].url))
+        (a.ui.entry.clone(), a.offers[next].line.clone())
     };
     entry.set_text(&text);
     entry.set_position(-1);
     shared.borrow_mut().setting_text = false;
-    render_completion(shared);
+    if text.ends_with(' ') { on_entry_changed(shared); } else { render_completion(shared); }
 }
 
 fn find(shared: &Shared, text: &str) {
@@ -1604,10 +1652,11 @@ Every key runs a command from the table; <code>:bind &lt;keys&gt; &lt;command&gt
 A folded group shows as its name and a count; its tabs are skipped until it is unfolded. A group with no tabs
 stays, dimmed at the end of the bar, until <code>:group-delete</code>. Groups come back with the session, and
 the <code>groups:</code> list in config.yml names groups that exist from the start.</p>
-<h2>Open prompt</h2>
-<p><kbd>o</kbd> lists the pages you were at last; typing narrows the list to pages whose URL or title holds every word,
-bookmarks (★) first. <kbd>Tab</kbd> and <kbd>Shift-Tab</kbd> put one on the line, <kbd>Return</kbd> opens it.
-Visits are kept in <code>~/.gaze/history</code>, the last five thousand pages.</p>
+<h2>Command line</h2>
+<p><kbd>Tab</kbd> and <kbd>Shift-Tab</kbd> walk what the line offers and put it there. Before the first space that is
+the commands; after <code>group</code> and its kin it is the group names, after <code>group-color</code> the colours.
+<kbd>o</kbd> lists the pages you were at last; typing narrows the list to pages whose URL or title holds every word,
+bookmarks (★) first. Visits are kept in <code>~/.gaze/history</code>, the last five thousand pages.</p>
 <h2>Passwords</h2>
 <p>Logins live in <code>~/.gaze/passwords</code>, sealed with a master password you choose the first time.
 A login form is filled when the page loads; after a sign-in with a new or changed password gaze asks whether to save it.
