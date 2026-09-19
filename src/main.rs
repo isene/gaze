@@ -34,7 +34,7 @@ enum Mode { Normal, Insert, Hint, Command, Prompt }
 
 /// What the command line at the bottom is asking for.
 #[derive(Clone, Debug)]
-enum Ask { Command, Find, GroupName, Master(Then) }
+enum Ask { Command, Find, GroupName, Master(Then), NewMaster }
 
 /// What to do once the passwords are unlocked.
 #[derive(Clone, Debug)]
@@ -757,6 +757,10 @@ fn schedule_save(shared: &Shared) {
 fn on_key(shared: &Shared, key: gdk::Key, state: gdk::ModifierType) -> glib::Propagation {
     use glib::Propagation::{Proceed, Stop};
     let mode = shared.borrow().mode;
+    if std::env::var_os("GAZE_DEBUG").is_some() {
+        let focused = current_view(&shared.borrow()).map(|v| v.has_focus()).unwrap_or(false);
+        eprintln!("gaze: key {:?} in {:?}, view focused: {}", key.name(), mode, focused);
+    }
     let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
     let ch = key.to_unicode();
     match mode {
@@ -929,12 +933,13 @@ fn begin_ask(shared: &Shared, ask: Ask, prefill: &str) {
         let mut a = shared.borrow_mut();
         a.mode = Mode::Command;
         a.keys.clear();
-        let hidden = matches!(ask, Ask::Master(_));
+        let hidden = matches!(ask, Ask::Master(_) | Ask::NewMaster);
         let hint = match &ask {
             Ask::Command => ":",
             Ask::Find => "/",
             Ask::GroupName => "group name:",
             Ask::Master(_) => if a.store.exists() { "master password:" } else { "new master password (blank for none):" },
+            Ask::NewMaster => "new master password (blank for none):",
         };
         a.ask = ask;
         let e = a.ui.entry.clone();
@@ -975,6 +980,13 @@ fn entry_done(shared: &Shared) {
         Ask::Command => run_command(shared, &text),
         Ask::Find => find(shared, &text),
         Ask::GroupName => group_current(shared, &text),
+        Ask::NewMaster => {
+            let r = shared.borrow_mut().store.change_master(&text);
+            match r {
+                Ok(()) => set_message(shared, "Master password changed"),
+                Err(e) => set_message(shared, &format!("Passwords: {}", e)),
+            }
+        }
         Ask::Master(then) => {
             let result = shared.borrow_mut().store.unlock(&text);
             match result {
@@ -1259,6 +1271,10 @@ fn run_command(shared: &Shared, line: &str) {
             else { when_unlocked(shared, Then::Remove(arg.to_string())); }
         }
         "password-lock" => { shared.borrow_mut().store.lock(); set_message(shared, "Passwords locked"); }
+        "password-master" => {
+            if shared.borrow().store.unlocked() { begin_ask(shared, Ask::NewMaster, ""); }
+            else { set_message(shared, "Unlock the passwords first (gp), then :password-master"); }
+        }
         "adblock-update" => adblock_download(shared),
         "bind" => {
             let Some((k, c)) = arg.split_once(' ') else { set_message(shared, "bind <keys> <command>"); return };
@@ -1457,6 +1473,7 @@ fn prompt_answer(shared: &Shared, yes: bool) {
 
 /// A message from the page script of tab `id`.
 fn on_message(shared: &Shared, id: u64, text: &str) {
+    if std::env::var_os("GAZE_DEBUG").is_some() { eprintln!("gaze: message from tab {}: {}", id, text.chars().take(80).collect::<String>()); }
     let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else { return };
     let kind = v.get("t").and_then(|t| t.as_str()).unwrap_or("");
     let is_current = shared.borrow().tabs.current().map(|t| t.id) == Some(id);
@@ -1673,6 +1690,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Passwords", "fill", "fill the login form; again for the next saved login of the site"),
     ("Passwords", "passwords", "list the sites and usernames"), ("Passwords", "password-import <csv>", "read the CSV Firefox writes from about:logins → Export, then delete it"),
     ("Passwords", "password-remove <username>", "forget one login for this site"), ("Passwords", "password-lock", "lock the store for this session"),
+    ("Passwords", "password-master", "choose a new master password"),
     ("Other", "bind <keys> <command>", "bind keys; kept in ~/.gaze/keys.yml"), ("Other", "unbind <keys>", ""),
     ("Other", "adblock-update", "fetch the hosts list again and rebuild the ad blocker"),
     ("Other", "help", "this page"), ("Other", "inspect", "the web inspector"), ("Other", "session-save", ""), ("Other", "quit", ""),

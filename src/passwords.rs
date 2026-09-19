@@ -72,6 +72,23 @@ impl Store {
         Ok(self.logins.len())
     }
 
+    /// Seal the store under a new master password, with a fresh salt.
+    pub fn change_master(&mut self, master: &str) -> Result<(), String> {
+        if self.key.is_none() { return Err("passwords are locked".into()); }
+        let mut salt = [0u8; SALT_LEN];
+        OsRng.fill_bytes(&mut salt);
+        let key = derive(master, &salt)?;
+        let (old_salt, old_key) = (self.salt, self.key);
+        self.salt = salt;
+        self.key = Some(key);
+        if let Err(e) = self.save() {
+            self.salt = old_salt;
+            self.key = old_key;
+            return Err(e);
+        }
+        Ok(())
+    }
+
     pub fn lock(&mut self) {
         self.key = None;
         self.logins.clear();
@@ -278,6 +295,18 @@ mod tests {
         assert_eq!(found[0].username, "new");
         assert_eq!(found[0].password, "p,2\"q");
         assert_eq!(s.import_csv(csv).unwrap(), (0, 0));
+        let _ = std::fs::remove_dir_all(s.path.parent().unwrap());
+    }
+
+    #[test]
+    fn the_master_password_can_be_changed() {
+        let mut s = fresh("master");
+        s.unlock("old").unwrap();
+        s.remember(Login { origin: "https://a.no".into(), username: "u".into(), password: "p".into(), used: 0 }).unwrap();
+        s.change_master("new").unwrap();
+        s.lock();
+        assert!(s.unlock("old").is_err());
+        assert_eq!(s.unlock("new").unwrap(), 1);
         let _ = std::fs::remove_dir_all(s.path.parent().unwrap());
     }
 
