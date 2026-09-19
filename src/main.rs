@@ -534,14 +534,13 @@ fn tabbar_markup(tabs: &Tabs) -> String {
     let mut n = 0;
     for (i, t) in tabs.tabs.iter().enumerate() {
         let group = t.group.and_then(|g| tabs.group_by_id(g));
+        // An open group shows only as its colour on the tabs; a folded one
+        // needs a label, since its tabs are hidden.
         if t.group != last_group {
-            if let Some(g) = group {
+            if let Some(g) = group.filter(|g| g.collapsed) {
                 let hex = tabs::color_hex(&g.color);
-                let mark = if g.collapsed { "▸" } else { "▾" };
-                out.push_str(&format!(" <span foreground=\"{}\"><b>{}{}</b></span>", hex, mark, glib::markup_escape_text(&g.name)));
-                if g.collapsed {
-                    out.push_str(&format!("<span foreground=\"{}\">({})</span>", hex, tabs.tabs_in(g.id).len()));
-                }
+                out.push_str(&format!(" <span foreground=\"{}\"><b>▸{}</b>({})</span>",
+                    hex, glib::markup_escape_text(&g.name), tabs.tabs_in(g.id).len()));
             }
             last_group = t.group;
         }
@@ -1254,7 +1253,12 @@ fn after_unlock(shared: &Shared, then: Then) {
             };
             let r = shared.borrow_mut().store.import_csv(&text);
             match r {
-                Ok((added, updated)) => set_message(shared, &format!("Imported {} logins, updated {}. Delete the CSV now.", added, updated)),
+                Ok((added, updated)) => {
+                    // The CSV holds every password in plain text; it has done its job.
+                    let gone = std::fs::remove_file(&path).is_ok();
+                    set_message(shared, &format!("Imported {} logins, updated {}{}", added, updated,
+                        if gone { "; the CSV is deleted" } else { "" }));
+                }
                 Err(e) => set_message(shared, &format!("Import failed: {}", e)),
             }
         }
@@ -1566,7 +1570,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Bookmarks", "bookmark-add [title]", "bookmark this page"), ("Bookmarks", "bookmark-del [url]", "forget this page's bookmark"),
     ("Bookmarks", "bookmarks", "the list, at gaze://bookmarks"), ("Bookmarks", "bookmark-import <file>", "read a Firefox HTML export"),
     ("Passwords", "fill", "fill the login form; again for the next saved login of the site"),
-    ("Passwords", "passwords", "list the sites and usernames"), ("Passwords", "password-import <csv>", "read the CSV Firefox writes from about:logins → Export"),
+    ("Passwords", "passwords", "list the sites and usernames"), ("Passwords", "password-import <csv>", "read the CSV Firefox writes from about:logins → Export, then delete it"),
     ("Passwords", "password-remove <username>", "forget one login for this site"), ("Passwords", "password-lock", "lock the store for this session"),
     ("Other", "bind <keys> <command>", "bind keys; kept in ~/.gaze/keys.yml"), ("Other", "unbind <keys>", ""),
     ("Other", "adblock-update", "fetch the hosts list again and rebuild the ad blocker"),
