@@ -18,6 +18,8 @@ pub struct Config {
     pub scroll_step: i32,
     /// Block the domains of Steven Black's hosts list.
     pub adblock: bool,
+    /// Text size of the tab bar, status bar and command line, in pixels.
+    pub font_size: u32,
     /// Tab groups that exist from the start, made when missing.
     pub groups: Vec<GroupSpec>,
 }
@@ -39,6 +41,7 @@ impl Default for Config {
             zoom: 1.0,
             scroll_step: 80,
             adblock: true,
+            font_size: 14,
             groups: Vec::new(),
         }
     }
@@ -52,6 +55,8 @@ downloads: ~/Downloads
 zoom: 1.0
 scroll_step: 80
 adblock: true
+# Text size of the tab bar, status bar and command line, in pixels:
+font_size: 14
 # Tab groups that always exist, with a colour name or #rrggbb:
 # groups:
 #   - {name: Work, color: '#5faf87'}

@@ -216,7 +216,7 @@ fn build(app: &gtk::Application) -> Shared {
     if let Some(ctx) = WebContext::default() {
         ctx.register_uri_scheme("gaze", serve_internal);
     }
-    style();
+    style(cfg.font_size);
 
     let window = gtk::ApplicationWindow::builder()
         .application(app).title("gaze").default_width(1280).default_height(860).build();
@@ -311,16 +311,17 @@ fn build(app: &gtk::Application) -> Shared {
     shared
 }
 
-fn style() {
-    let css = "
-        .tabbar, .statusbar { font-family: monospace; font-size: 12px; padding: 2px 6px;
-                              background: #1e1e1e; color: #c8c8c8; }
-        .cmdline { font-family: monospace; font-size: 13px; background: #101010; color: #ffffff;
-                   border: none; border-radius: 0; padding: 2px 6px; min-height: 0; }
-        .completion { font-family: monospace; font-size: 12px; padding: 4px 6px; background: #141414; color: #c8c8c8; }
-    ";
+fn style(font_size: u32) {
+    let px = font_size.clamp(8, 40);
+    let css = format!("
+        .tabbar, .statusbar {{ font-family: monospace; font-size: {px}px; padding: 2px 6px;
+                              background: #1e1e1e; color: #c8c8c8; }}
+        .cmdline {{ font-family: monospace; font-size: {px}px; background: #101010; color: #ffffff;
+                   border: none; border-radius: 0; padding: 2px 6px; min-height: 0; }}
+        .completion {{ font-family: monospace; font-size: {px}px; padding: 4px 6px; background: #141414; color: #c8c8c8; }}
+    ");
     let provider = gtk::CssProvider::new();
-    provider.load_from_string(css);
+    provider.load_from_string(&css);
     if let Some(display) = gdk::Display::default() {
         gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
@@ -1754,7 +1755,7 @@ A site's HTTP password dialog is answered from the store too, when it is open.</
 to <code>~/.gaze/adblock/hosts</code> and compiles it into a WebKit content filter; every domain on the list is blocked.
 <code>:adblock-update</code> fetches it again.</p>
 <h2>Files</h2>
-<p><code>~/.gaze/config.yml</code>: home page, search engine, download folder, zoom, scroll step, ad blocking.
+<p><code>~/.gaze/config.yml</code>: home page, search engine, download folder, zoom, scroll step, ad blocking, text size of the bars.
 <code>~/.gaze/keys.yml</code>: your key changes. <code>~/.gaze/bookmarks</code>: one per line.
 <code>~/.gaze/session.json</code>: the open tabs and groups.</p>
 "#, table)

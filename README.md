@@ -76,7 +76,7 @@ Runtime: WebKitGTK 6.0 and GTK 4. To make gaze the browser other programs open l
 
 ## Files
 
-- `~/.gaze/config.yml`: home page, search engine (`%s` is the query), download folder, zoom, scroll step, ad blocking, standing groups.
+- `~/.gaze/config.yml`: home page, search engine (`%s` is the query), download folder, zoom, scroll step, ad blocking, text size of the bars (`font_size`, in pixels), standing groups.
 - `~/.gaze/keys.yml`: the key bindings you changed.
 - `~/.gaze/bookmarks`: the bookmarks, one per line.
 - `~/.gaze/history`: one line per visit, folded to one entry per page when read.
