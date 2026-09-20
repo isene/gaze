@@ -72,7 +72,7 @@ sudo apt install libwebkitgtk-6.0-dev libgtk-4-dev   # Debian / Ubuntu
 cargo install --path .
 ```
 
-Runtime: WebKitGTK 6.0 and GTK 4. gaze drops `gl` from `GDK_DISABLE` for itself: with GL switched off that way, WebKit crashes on pages with video, while a display with no GL at all is fine. `GAZE_KEEP_GDK_DISABLE=1` leaves the variable alone. To make gaze the browser other programs open links in, copy `share/gaze.desktop` to `~/.local/share/applications/` and run `xdg-settings set default-web-browser gaze.desktop`. A second `gaze <url>` opens the URL in the running window.
+Runtime: WebKitGTK 6.0 and GTK 4. gaze drops `gl` from `GDK_DISABLE` for itself: with GL switched off that way, WebKit crashes on pages with video, while a display with no GL at all is fine. `GAZE_KEEP_GDK_DISABLE=1` leaves the variable alone. On software GL it also sets `LP_NUM_THREADS=1` unless you did: llvmpipe on every core costs several times the CPU for the same page. To make gaze the browser other programs open links in, copy `share/gaze.desktop` to `~/.local/share/applications/` and run `xdg-settings set default-web-browser gaze.desktop`. A second `gaze <url>` opens the URL in the running window.
 
 ## Files
 
