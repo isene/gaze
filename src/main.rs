@@ -1738,7 +1738,18 @@ fn passwords_page() -> String {
 const PAGE_CSS: &str = "body{background:#1e1e1e;color:#d0d0d0;font:15px/1.5 sans-serif;max-width:56em;margin:2em auto;padding:0 1em}\
  h1{color:#f0883e}h2{color:#e0b93a;margin-top:1.6em}code,kbd{font-family:monospace;background:#2c2c2c;padding:1px 5px;border-radius:3px;color:#fff}\
  table{border-collapse:collapse}td,th{text-align:left;padding:3px 14px 3px 0;vertical-align:top}th{color:#e0b93a;padding-top:1.2em}\
- a{color:#7ab7ff;text-decoration:none}a:hover{text-decoration:underline}.u{color:#8a8a8a;font-size:13px}";
+ a{color:#7ab7ff;text-decoration:none}a:hover{text-decoration:underline}.u{color:#8a8a8a;font-size:13px}\
+ .help{max-width:80em}.hero{display:flex;gap:1.8em;align-items:center;margin-bottom:1.4em}.hero svg{width:120px;height:120px;flex:none}\
+ .hero h1{margin:0 0 .15em;font-size:2.4em}.v{color:#8a8a8a;font-size:.45em;font-weight:normal;margin-left:.5em}\
+ .tag{margin:0 0 .5em;color:#eee;font-size:17px}.links a{margin-right:1.3em;white-space:nowrap}\
+ .modes{display:flex;flex-wrap:wrap;gap:.8em;margin-bottom:1.4em}.mode{flex:1 1 15em;background:#262626;border-radius:8px;padding:.6em 1em;font-size:14px}\
+ .mode b{color:#e0b93a;display:block;margin-bottom:.15em}\
+ .cards{display:grid;grid-template-columns:1fr 1fr;gap:0 1.4em;align-items:start}.card{background:#242424;border-radius:8px;padding:.1em 1.1em .7em;margin-bottom:1.4em}\
+ .card h2{margin:.7em 0 .3em;font-size:1.15em}.card td{font-size:14px;padding:2px 12px 2px 0}.card .k span{display:inline-block;max-width:15em}.card code,.card kbd{white-space:nowrap}\
+ .more{columns:2;column-gap:2.5em;margin-top:1em}.more h2{break-after:avoid;margin-top:1em}.more p{margin-top:.3em}";
+
+/// The logo, drawn into the help page.
+const LOGO: &str = include_str!("../img/gaze.svg");
 
 fn bookmarks_page() -> String {
     let rows = with_app(|s| {
@@ -1759,21 +1770,21 @@ fn bookmarks_page() -> String {
 
 /// Every command, grouped, for the help page. Keys come from the keymap.
 const COMMANDS: &[(&str, &str, &str)] = &[
-    ("Pages", "open [url]", "open a URL, a search or a file here; asks when given nothing"),
-    ("Pages", "tabopen [url]", "the same in a new tab"),
-    ("Pages", "cmd <text>", "open the command line with this text; {url} and {title} are filled in"),
-    ("Pages", "back", "go back"), ("Pages", "forward", "go forward"),
-    ("Pages", "reload", "reload"), ("Pages", "reload-force", "reload without the cache"), ("Pages", "stop", "stop loading"),
-    ("Pages", "home", "the home page from config.yml"),
-    ("Pages", "hint", "type the letters on a link to follow it"), ("Pages", "hint-tab", "the same, into a background tab"),
-    ("Pages", "insert", "insert mode: keys go to the page until Esc"), ("Pages", "focus-input", "focus the first field on the page"),
-    ("Pages", "scroll-down", "scroll"), ("Pages", "scroll-up", ""), ("Pages", "scroll-left", ""), ("Pages", "scroll-right", ""),
-    ("Pages", "scroll-page <share>", "scroll by a share of the window; 0.5 is half a page down, -0.5 up"),
-    ("Pages", "scroll-top", "to the top"), ("Pages", "scroll-bottom", "to the bottom"),
-    ("Pages", "find [text]", "find on the page; asks when given nothing"), ("Pages", "find-next", ""), ("Pages", "find-prev", ""),
-    ("Pages", "yank url|title", "copy to the clipboard"), ("Pages", "paste", "open what the clipboard holds here"), ("Pages", "paste-tab", "the same in a new tab"),
-    ("Pages", "zoom-in", ""), ("Pages", "zoom-out", ""), ("Pages", "zoom-reset", ""), ("Pages", "zoom <percent>", ""),
-    ("Pages", "fullscreen", "hide the tab bar and the status line; again to bring them back"),
+    ("Open and go", "open [url]", "open a URL, a search or a file here; asks when given nothing"),
+    ("Open and go", "tabopen [url]", "the same in a new tab"),
+    ("Open and go", "cmd <text>", "open the command line with this text; {url} and {title} are filled in"),
+    ("Open and go", "back", "go back"), ("Open and go", "forward", "go forward"),
+    ("Open and go", "reload", "reload"), ("Open and go", "reload-force", "reload without the cache"), ("Open and go", "stop", "stop loading"),
+    ("Open and go", "home", "the home page from config.yml"),
+    ("On the page", "hint", "type the letters on a link to follow it"), ("On the page", "hint-tab", "the same, into a background tab"),
+    ("On the page", "insert", "insert mode: keys go to the page until Esc"), ("On the page", "focus-input", "focus the first field on the page"),
+    ("On the page", "scroll-down", "scroll"), ("On the page", "scroll-up", ""), ("On the page", "scroll-left", ""), ("On the page", "scroll-right", ""),
+    ("On the page", "scroll-page <share>", "scroll by a share of the window; 0.5 is half a page down, -0.5 up"),
+    ("On the page", "scroll-top", "to the top"), ("On the page", "scroll-bottom", "to the bottom"),
+    ("On the page", "find [text]", "find on the page; asks when given nothing"), ("On the page", "find-next", ""), ("On the page", "find-prev", ""),
+    ("Copy, zoom, view", "yank url|title", "copy to the clipboard"), ("Copy, zoom, view", "paste", "open what the clipboard holds here"), ("Copy, zoom, view", "paste-tab", "the same in a new tab"),
+    ("Copy, zoom, view", "zoom-in", ""), ("Copy, zoom, view", "zoom-out", ""), ("Copy, zoom, view", "zoom-reset", ""), ("Copy, zoom, view", "zoom <percent>", ""),
+    ("Copy, zoom, view", "fullscreen", "hide the tab bar and the status line; again to bring them back"),
     ("Tabs", "tab-next", "the next visible tab"), ("Tabs", "tab-prev", "the previous one"),
     ("Tabs", "tab <n>", "the n-th visible tab"), ("Tabs", "tab-first", ""), ("Tabs", "tab-last", ""),
     ("Tabs", "tab-move +1|-1|<n>", "move this tab"), ("Tabs", "close", "close this tab"), ("Tabs", "undo", "bring back the last closed tab"),
@@ -1796,27 +1807,46 @@ const COMMANDS: &[(&str, &str, &str)] = &[
 ];
 
 fn help_page() -> String {
-    let table = with_app(|s| {
+    let cards = with_app(|s| {
         let a = s.borrow();
-        let mut out = String::new();
-        let mut group = "";
+        // One card per group, in two columns split where the rows come out even.
+        let mut groups: Vec<(&str, String, usize)> = Vec::new();
         for (g, cmd, what) in COMMANDS {
-            if *g != group {
-                group = g;
-                out.push_str(&format!("<tr><th colspan=3>{}</th></tr>", g));
-            }
+            if groups.last().map_or(true, |(name, _, _)| name != g) { groups.push((g, String::new(), 2)); }
             let word = cmd.split_whitespace().next().unwrap_or(cmd);
             let keys = a.keymap.keys_for(word).iter().map(|k| format!("<kbd>{}</kbd>", esc(k))).collect::<Vec<_>>().join(" ");
-            out.push_str(&format!("<tr><td>{}</td><td><code>{}</code></td><td>{}</td></tr>", keys, esc(cmd), esc(what)));
+            let last = groups.last_mut().unwrap();
+            last.1.push_str(&format!("<tr><td class=k><span>{}</span></td><td><code>{}</code></td><td>{}</td></tr>", keys, esc(cmd), esc(what)));
+            last.2 += 1;
         }
+        let half = groups.iter().map(|g| g.2).sum::<usize>() / 2;
+        let (mut out, mut sum, mut split) = (String::from("<div>"), 0, false);
+        for (g, rows, n) in &groups {
+            if !split && sum + n / 2 >= half { out.push_str("</div><div>"); split = true; }
+            out.push_str(&format!("<section class=card><h2>{}</h2><table>{}</table></section>", g, rows));
+            sum += n;
+        }
+        out.push_str("</div>");
         out
     }).unwrap_or_default();
-    format!(r#"<h1>gaze</h1>
-<p>Looking out onto the web. <kbd>Esc</kbd> always returns to normal mode; <kbd>:</kbd> opens the command line.
-Every key runs a command from the table; <code>:bind &lt;keys&gt; &lt;command&gt;</code> changes one and
-<code>~/.gaze/keys.yml</code> keeps the change. Key names: plain characters as they are, else
-<code>&lt;Ctrl-d&gt;</code>, <code>&lt;Alt-1&gt;</code>, <code>&lt;Shift-Left&gt;</code>, <code>&lt;Space&gt;</code>.</p>
-<table>{}</table>
+    format!(r#"<body class=help>
+<header class=hero>{logo}<div>
+<h1>gaze<span class=v>v{ver}</span></h1>
+<p class=tag>Looking out onto the web. A keyboard-driven browser in Rust, around WebKitGTK.</p>
+<p class=links><a href="https://github.com/isene/gaze">Repository</a> <a href="https://github.com/isene/gaze#readme">README</a>
+<a href="https://github.com/isene/gaze/releases">Releases</a> <a href="https://github.com/isene/gaze/issues">Issues</a>
+<a href="https://isene.github.io/fe2o3/">Fe₂O₃ suite</a> <a href="https://isene.org">isene.org</a>
+<a href="gaze://bookmarks">gaze://bookmarks</a> <a href="gaze://passwords">gaze://passwords</a></p>
+</div></header>
+<div class=modes>
+<div class=mode><b>Normal</b>Keys run the commands below. <kbd>Esc</kbd> always comes back here.</div>
+<div class=mode><b>Insert</b><kbd>i</kbd>, <kbd>gi</kbd> or a click on a field. Keys go to the page; <kbd>Tab</kbd> moves to the next field.</div>
+<div class=mode><b>Hint</b><kbd>f</kbd> or <kbd>F</kbd>. Type the letters shown on a link to follow it, here or in a background tab.</div>
+<div class=mode><b>Command line</b><kbd>:</kbd>. <kbd>Tab</kbd> completes. <code>:bind &lt;keys&gt; &lt;command&gt;</code> changes a key;
+names are plain characters, else <code>&lt;Ctrl-d&gt;</code>, <code>&lt;Alt-1&gt;</code>, <code>&lt;Shift-Left&gt;</code>, <code>&lt;Space&gt;</code>.</div>
+</div>
+<div class=cards>{cards}</div>
+<div class=more>
 <h2>Tab groups</h2>
 <p>A group is a named, coloured run of tabs, as in Firefox. A tab opened from a grouped tab joins the group.
 A folded group shows as its name and a count; its tabs are skipped until it is unfolded. A group with no tabs
@@ -1839,5 +1869,6 @@ to <code>~/.gaze/adblock/hosts</code> and compiles it into a WebKit content filt
 <p><code>~/.gaze/config.yml</code>: home page, search engine, download folder, zoom, scroll step, ad blocking, text size of the bars.
 <code>~/.gaze/keys.yml</code>: your key changes. <code>~/.gaze/bookmarks</code>: one per line.
 <code>~/.gaze/session.json</code>: the open tabs and groups.</p>
-"#, table)
+</div>
+"#, logo = LOGO, ver = env!("CARGO_PKG_VERSION"), cards = cards)
 }
