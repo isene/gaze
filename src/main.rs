@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use webkit6::prelude::*;
 use webkit6::{
-    CookiePersistentStorage, Credential, CredentialPersistence, Download, FindOptions, LoadEvent,
+    CookieAcceptPolicy, CookiePersistentStorage, Credential, CredentialPersistence, Download, FindOptions, LoadEvent,
     NavigationPolicyDecision, NetworkSession, PolicyDecisionType, ResponsePolicyDecision, Settings,
     URISchemeRequest, UserContentFilter, UserContentFilterStore, UserContentInjectedFrames,
     UserContentManager, UserScript, UserScriptInjectionTime, WebContext, WebView,
@@ -204,6 +204,10 @@ fn build(app: &gtk::Application) -> Shared {
     let session = NetworkSession::new(data.to_str(), cache.to_str());
     if let Some(cm) = session.cookie_manager() {
         cm.set_persistent_storage(&data.join("cookies.sqlite").to_string_lossy(), CookiePersistentStorage::Sqlite);
+        // WebKit refuses third-party cookies by default. Google's sign-in
+        // hands you to YouTube through one, and refusing it ends on
+        // YouTube's "oops" page instead of your account.
+        cm.set_accept_policy(CookieAcceptPolicy::Always);
     }
     let downloads = config::expand(&cfg.downloads);
     session.connect_download_started(move |_, download| on_download(download, downloads.clone()));

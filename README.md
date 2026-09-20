@@ -84,6 +84,7 @@ Runtime: WebKitGTK 6.0 and GTK 4. To make gaze the browser other programs open l
 - `~/.gaze/passwords`: the sealed logins.
 - `~/.gaze/adblock`: the hosts list and the compiled filter.
 - `~/.gaze/data`, `~/.gaze/cache`: cookies, local storage and the cache, kept by WebKit.
+  Cookies are accepted from any site, third parties too: Google's sign-in hands you to YouTube through one, and refusing it ends on YouTube's "oops" page.
 
 ## License
 
