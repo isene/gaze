@@ -47,6 +47,7 @@ struct Ui {
     window: gtk::ApplicationWindow,
     tabbar: gtk::Label,
     stack: gtk::Stack,
+    bottom: gtk::Box,
     status: gtk::Label,
     right: gtk::Label,
     entry: gtk::Entry,
@@ -290,7 +291,7 @@ fn build(app: &gtk::Application) -> Shared {
     let keymap = keys::Keymap::load(dir.join("keys.yml"));
     let marks = bookmarks::Bookmarks::load(dir.join("bookmarks"));
     let shared: Shared = Rc::new(RefCell::new(App {
-        ui: Ui { window: window.clone(), tabbar, stack, status, right, entry: entry.clone(), completion },
+        ui: Ui { window: window.clone(), tabbar, stack, bottom, status, right, entry: entry.clone(), completion },
         cfg, tabs, views: HashMap::new(), session, settings,
         mode: Mode::Normal, keys: String::new(), ask: Ask::Command, prompt: None,
         message: String::new(), hover: String::new(), store, fill_at: HashMap::new(),
@@ -1265,6 +1266,7 @@ fn run_command(shared: &Shared, line: &str) {
         }
         "paste" => paste_and_open(shared, false),
         "paste-tab" => paste_and_open(shared, true),
+        "fullscreen" => { let a = shared.borrow(); let on = a.ui.tabbar.is_visible(); a.ui.tabbar.set_visible(!on); a.ui.bottom.set_visible(!on); }
         "zoom-in" => zoom(shared, 0.1),
         "zoom-out" => zoom(shared, -0.1),
         "zoom-reset" => { let z = shared.borrow().cfg.zoom; with_view(shared, |v| v.set_zoom_level(z)); set_message(shared, "Zoom reset"); }
@@ -1771,6 +1773,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Pages", "find [text]", "find on the page; asks when given nothing"), ("Pages", "find-next", ""), ("Pages", "find-prev", ""),
     ("Pages", "yank url|title", "copy to the clipboard"), ("Pages", "paste", "open what the clipboard holds here"), ("Pages", "paste-tab", "the same in a new tab"),
     ("Pages", "zoom-in", ""), ("Pages", "zoom-out", ""), ("Pages", "zoom-reset", ""), ("Pages", "zoom <percent>", ""),
+    ("Pages", "fullscreen", "hide the tab bar and the status line; again to bring them back"),
     ("Tabs", "tab-next", "the next visible tab"), ("Tabs", "tab-prev", "the previous one"),
     ("Tabs", "tab <n>", "the n-th visible tab"), ("Tabs", "tab-first", ""), ("Tabs", "tab-last", ""),
     ("Tabs", "tab-move +1|-1|<n>", "move this tab"), ("Tabs", "close", "close this tab"), ("Tabs", "undo", "bring back the last closed tab"),

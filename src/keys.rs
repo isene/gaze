@@ -15,7 +15,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("<Down>", "scroll-down"), ("<Up>", "scroll-up"),
     ("gg", "scroll-top"), ("G", "scroll-bottom"), ("<Home>", "scroll-top"), ("<End>", "scroll-bottom"),
     ("<Ctrl-d>", "scroll-page 0.5"), ("<Ctrl-u>", "scroll-page -0.5"),
-    ("<Ctrl-f>", "scroll-page 0.9"), ("<Ctrl-b>", "scroll-page -0.9"),
+    ("<Ctrl-f>", "fullscreen"), ("<Ctrl-b>", "scroll-page -0.9"),
     ("<Space>", "scroll-page 0.9"), ("<Shift-Space>", "scroll-page -0.9"),
     ("<PgDown>", "scroll-page 0.9"), ("<PgUp>", "scroll-page -0.9"),
     ("H", "back"), ("L", "forward"), ("<Backspace>", "back"),

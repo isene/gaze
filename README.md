@@ -20,6 +20,7 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 | `r` | Reload |
 | `j` `k` `h` `l`, `gg`, `G`, `Ctrl-d` / `Ctrl-u`, `Space` | Scroll |
 | `/`, `n` / `N` | Find on the page |
+| `Ctrl-f` | Only the page: hide the tab bar and the status line; again to bring them back |
 | `i`, `gi` | Insert mode (type into the page) / focus the first field. A click on a field enters it too; `Tab` moves to the next field; `Esc` leaves |
 | `yy`, `pp` / `PP` | Copy the URL; open what the clipboard holds here / in a new tab |
 | `t`, `d`, `u` | New tab, close tab, bring back the last closed |
