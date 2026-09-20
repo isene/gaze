@@ -22,6 +22,11 @@ pub struct Config {
     pub font_size: u32,
     /// Tab groups that exist from the start, made when missing.
     pub groups: Vec<GroupSpec>,
+    /// The program a video page opens in instead of the browser; empty
+    /// keeps videos in gaze.
+    pub video_player: String,
+    /// Beginnings of the URLs that go to the player.
+    pub video_urls: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -43,6 +48,9 @@ impl Default for Config {
             adblock: true,
             font_size: 14,
             groups: Vec::new(),
+            video_player: "mpv".into(),
+            video_urls: ["https://www.youtube.com/watch", "https://m.youtube.com/watch", "https://youtu.be/", "https://www.youtube.com/shorts/", "https://vimeo.com/"]
+                .iter().map(|s| s.to_string()).collect(),
         }
     }
 }
@@ -57,6 +65,15 @@ scroll_step: 80
 adblock: true
 # Text size of the tab bar, status bar and command line, in pixels:
 font_size: 14
+# A video page opens in this program instead of the browser; empty keeps it in gaze.
+video_player: mpv
+# The URLs that count as a video page, by how they start:
+video_urls:
+  - https://www.youtube.com/watch
+  - https://m.youtube.com/watch
+  - https://youtu.be/
+  - https://www.youtube.com/shorts/
+  - https://vimeo.com/
 # Tab groups that always exist, with a colour name or #rrggbb:
 # groups:
 #   - {name: Work, color: '#5faf87'}

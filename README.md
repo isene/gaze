@@ -28,6 +28,7 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 | `zc` / `zo` / `za` | Fold / unfold / toggle the current tab's group; `zM` and `zR` do all |
 | `M`, `gb` / `gB` | Bookmark this page; the bookmark list here / in a new tab |
 | `gp` | Fill the login form; again for the next saved login of the site |
+| `v` | Play this page's video in `mpv` (see Video) |
 | `:` | Command line |
 | `Q`, `ZZ` | Quit |
 
@@ -65,6 +66,12 @@ Logins live in `~/.gaze/passwords`, one file sealed with ChaCha20-Poly1305 under
 
 On by default; `adblock: false` in the config turns it off. The first start fetches [Steven Black's hosts list](https://github.com/StevenBlack/hosts) to `~/.gaze/adblock/hosts` and compiles it into a WebKit content filter, which takes a few seconds once. Every domain on the list is then blocked for every request. `:adblock-update` fetches the list again.
 
+## Video
+
+A video page goes to `mpv` instead of the browser: a click on a YouTube link, a typed or pasted address, a link opened in a new tab. YouTube's own pages stay in gaze; only the watch pages leave. `v` sends the page you are on to `mpv`, for a video you reached inside YouTube itself. `mpv` plays YouTube through `yt-dlp`, and it costs about half the battery of the same video in a browser.
+
+`video_player` in the config names the program, empty keeps videos in gaze, and `video_urls` lists how a video page's address starts.
+
 ## Install
 
 ```bash
@@ -72,7 +79,7 @@ sudo apt install libwebkitgtk-6.0-dev libgtk-4-dev   # Debian / Ubuntu
 cargo install --path .
 ```
 
-Runtime: WebKitGTK 6.0 and GTK 4. gaze drops `gl` from `GDK_DISABLE` for itself: with GL switched off that way, WebKit crashes on pages with video, while a display with no GL at all is fine. `GAZE_KEEP_GDK_DISABLE=1` leaves the variable alone. On software GL it also sets `LP_NUM_THREADS=1` unless you did: llvmpipe on every core costs several times the CPU for the same page. To make gaze the browser other programs open links in, copy `share/gaze.desktop` to `~/.local/share/applications/` and run `xdg-settings set default-web-browser gaze.desktop`. A second `gaze <url>` opens the URL in the running window.
+Runtime: WebKitGTK 6.0 and GTK 4. gaze drops `gl` from `GDK_DISABLE` for itself: with GL switched off that way, WebKit crashes on pages with video, while a display with no GL at all is fine. `GAZE_KEEP_GDK_DISABLE=1` leaves the variable alone. On software GL it also sets `LP_NUM_THREADS=1` and `WEBKIT_SKIA_ENABLE_CPU_RENDERING=1` unless you did: llvmpipe on every core costs several times the CPU for the same page, and WebKit painting on the CPU saves a third more. To make gaze the browser other programs open links in, copy `share/gaze.desktop` to `~/.local/share/applications/` and run `xdg-settings set default-web-browser gaze.desktop`. A second `gaze <url>` opens the URL in the running window.
 
 ## Files
 

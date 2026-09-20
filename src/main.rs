@@ -112,6 +112,9 @@ fn main() {
     // every core and burns three to five times the CPU of one thread,
     // for no smoother page. One thread it is, unless you say otherwise.
     if std::env::var_os("LP_NUM_THREADS").is_none() { std::env::set_var("LP_NUM_THREADS", "1"); }
+    // And WebKit paints its tiles on the CPU rather than through that
+    // software GL: a third less work for the same page.
+    if std::env::var_os("WEBKIT_SKIA_ENABLE_CPU_RENDERING").is_none() { std::env::set_var("WEBKIT_SKIA_ENABLE_CPU_RENDERING", "1"); }
     let app = gtk::Application::builder()
         .application_id("org.isene.gaze")
         .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)
@@ -458,6 +461,15 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
                 PolicyDecisionType::NavigationAction => {
                     let Some(nav) = decision.downcast_ref::<NavigationPolicyDecision>() else { return false };
                     let Some(action) = nav.navigation_action() else { return false };
+                    if action.is_user_gesture() {
+                        if let Some(uri) = action.request().and_then(|r| r.uri()) {
+                            if is_video(&s, &uri) {
+                                play(&s, &uri);
+                                decision.ignore();
+                                return true;
+                            }
+                        }
+                    }
                     let ctrl = action.modifiers() & gdk::ModifierType::CONTROL_MASK.bits() != 0;
                     let wants_tab = action.mouse_button() == 2 || (action.mouse_button() == 1 && ctrl);
                     if wants_tab && action.is_user_gesture() {
@@ -670,7 +682,35 @@ fn set_mode(shared: &Shared, mode: Mode) {
 
 // ------------------------------------------------------------------ tabs
 
+/// Is this a page the config sends to the video player?
+fn is_video(shared: &Shared, uri: &str) -> bool {
+    let a = shared.borrow();
+    !a.cfg.video_player.is_empty() && a.cfg.video_urls.iter().any(|p| uri.starts_with(p.as_str()))
+}
+
+/// Hand a video page to the player, detached, and say so.
+fn play(shared: &Shared, uri: &str) {
+    let player = shared.borrow().cfg.video_player.clone();
+    match std::process::Command::new(&player).arg(uri)
+        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
+        Ok(_) => set_message(shared, &format!("{}: {}", player, uri)),
+        Err(e) => set_message(shared, &format!("{}: {}", player, e)),
+    }
+}
+
+/// Load a URL here or in a new tab, unless it is a video: that goes to
+/// the player.
+fn open_or_play(shared: &Shared, uri: &str, new_tab: bool) {
+    if is_video(shared, uri) { play(shared, uri); }
+    else if new_tab { open_tab(shared, uri, false); }
+    else { with_view(shared, |v| v.load_uri(uri)); }
+}
+
 fn open_tab(shared: &Shared, uri: &str, background: bool) -> u64 {
+    if is_video(shared, uri) {
+        play(shared, uri);
+        return shared.borrow().tabs.current().map(|t| t.id).unwrap_or(0);
+    }
     let id = shared.borrow_mut().tabs.open(uri, background);
     let view = make_view(shared, id, None);
     view.load_uri(uri);
@@ -924,7 +964,7 @@ fn paste_and_open(shared: &Shared, new_tab: bool) {
     clipboard().read_text_async(None::<&gio::Cancellable>, move |res| {
         let Ok(Some(text)) = res else { set_message(&s, "Clipboard is empty"); return };
         let uri = config::to_uri(&text, &s.borrow().cfg.search);
-        if new_tab { open_tab(&s, &uri, false); } else { with_view(&s, |v| v.load_uri(&uri)); }
+        open_or_play(&s, &uri, new_tab);
     });
 }
 
@@ -1180,11 +1220,16 @@ fn run_command(shared: &Shared, line: &str) {
         "cmd" => begin_ask(shared, Ask::Command, &rest.trim_start().replace("{url}", &uri).replace("{title}", &title)),
         "open" | "o" => {
             if arg.is_empty() { begin_ask(shared, Ask::Command, "open "); }
-            else { let u = config::to_uri(arg, &search); with_view(shared, |v| v.load_uri(&u)); }
+            else { let u = config::to_uri(arg, &search); open_or_play(shared, &u, false); }
         }
         "tabopen" | "t" => {
             if arg.is_empty() { begin_ask(shared, Ask::Command, "tabopen "); }
-            else { open_tab(shared, &config::to_uri(arg, &search), false); }
+            else { let u = config::to_uri(arg, &search); open_or_play(shared, &u, true); }
+        }
+        "play" => {
+            let target = if arg.is_empty() { uri.clone() } else { config::to_uri(arg, &search) };
+            if target.is_empty() || shared.borrow().cfg.video_player.is_empty() { set_message(shared, "No video player set (video_player in the config)"); }
+            else { play(shared, &target); }
         }
         "home" => { let h = shared.borrow().cfg.home.clone(); with_view(shared, |v| v.load_uri(&h)); }
         "back" => with_view(shared, |v| v.go_back()),
