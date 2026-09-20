@@ -112,9 +112,13 @@ fn main() {
     // every core and burns three to five times the CPU of one thread,
     // for no smoother page. One thread it is, unless you say otherwise.
     if std::env::var_os("LP_NUM_THREADS").is_none() { std::env::set_var("LP_NUM_THREADS", "1"); }
-    // And WebKit paints its tiles on the CPU rather than through that
-    // software GL: a third less work for the same page.
-    if std::env::var_os("WEBKIT_SKIA_ENABLE_CPU_RENDERING").is_none() { std::env::set_var("WEBKIT_SKIA_ENABLE_CPU_RENDERING", "1"); }
+    // On a desktop that forces software GL (LIBGL_ALWAYS_SOFTWARE), WebKit
+    // paints its tiles on the CPU rather than through that GL: a third
+    // less work for the same page. With a real GPU, WebKit's own choice
+    // stands.
+    if std::env::var_os("LIBGL_ALWAYS_SOFTWARE").is_some() && std::env::var_os("WEBKIT_SKIA_ENABLE_CPU_RENDERING").is_none() {
+        std::env::set_var("WEBKIT_SKIA_ENABLE_CPU_RENDERING", "1");
+    }
     let app = gtk::Application::builder()
         .application_id("org.isene.gaze")
         .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)
