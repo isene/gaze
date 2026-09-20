@@ -100,6 +100,14 @@ fn with_app<R>(f: impl FnOnce(&Shared) -> R) -> Option<R> {
 
 fn main() {
     arm_crash_log();
+    // With GL switched off by GDK_DISABLE=gl, WebKit's UI process
+    // crashes on pages with video (YouTube); left to find out for itself
+    // whether GL exists, it draws fine either way. gaze drops the switch
+    // for itself, unless GAZE_KEEP_GDK_DISABLE is set.
+    if let (Ok(v), Err(_)) = (std::env::var("GDK_DISABLE"), std::env::var("GAZE_KEEP_GDK_DISABLE")) {
+        let keep: Vec<&str> = v.split(',').map(str::trim).filter(|s| !s.is_empty() && *s != "gl").collect();
+        if keep.is_empty() { std::env::remove_var("GDK_DISABLE"); } else { std::env::set_var("GDK_DISABLE", keep.join(",")); }
+    }
     let app = gtk::Application::builder()
         .application_id("org.isene.gaze")
         .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)
