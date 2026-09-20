@@ -108,6 +108,10 @@ fn main() {
         let keep: Vec<&str> = v.split(',').map(str::trim).filter(|s| !s.is_empty() && *s != "gl").collect();
         if keep.is_empty() { std::env::remove_var("GDK_DISABLE"); } else { std::env::set_var("GDK_DISABLE", keep.join(",")); }
     }
+    // On software GL (Mesa's llvmpipe) WebKit's painting spreads over
+    // every core and burns three to five times the CPU of one thread,
+    // for no smoother page. One thread it is, unless you say otherwise.
+    if std::env::var_os("LP_NUM_THREADS").is_none() { std::env::set_var("LP_NUM_THREADS", "1"); }
     let app = gtk::Application::builder()
         .application_id("org.isene.gaze")
         .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)
