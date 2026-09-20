@@ -16,7 +16,7 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 |---|---|
 | `o` / `O` | Open a URL or a search here / in a new tab (`go`, `gO` start from the current URL). The prompt offers pages from your history and bookmarks; `Tab` picks one |
 | `f` / `F` | Hints: type the letters on a link to follow it / open it in a background tab |
-| `H` / `L` | Back / forward |
+| `H` / `L`, `Ctrl-Left` / `Ctrl-Right` | Back / forward in this tab's history |
 | `r` | Reload |
 | `j` `k` `h` `l`, `gg`, `G`, `Ctrl-d` / `Ctrl-u`, `Space` | Scroll |
 | `/`, `n` / `N` | Find on the page |

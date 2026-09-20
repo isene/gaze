@@ -19,6 +19,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("<Space>", "scroll-page 0.9"), ("<Shift-Space>", "scroll-page -0.9"),
     ("<PgDown>", "scroll-page 0.9"), ("<PgUp>", "scroll-page -0.9"),
     ("H", "back"), ("L", "forward"), ("<Backspace>", "back"),
+    ("<Ctrl-Left>", "back"), ("<Ctrl-Right>", "forward"),
     ("r", "reload"), ("R", "reload-force"),
     ("o", "cmd open "), ("O", "cmd tabopen "), ("t", "cmd tabopen "),
     ("go", "cmd open {url}"), ("gO", "cmd tabopen {url}"), (":", "cmd "),
