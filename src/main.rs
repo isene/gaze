@@ -674,11 +674,24 @@ fn popup_tab(shared: &Shared, parent: &WebView) -> WebView {
         let a = shared.borrow();
         a.views.iter().find(|(_, v)| *v == parent).map(|(id, _)| *id)
     };
-    let id = shared.borrow_mut().tabs.open_from("about:blank", false, opener);
+    // The tab exists at once but stays behind its opener until WebKit
+    // says the new page is ready to show. Switching to it inside the
+    // create signal crashed WebKit's UI process (YouTube Studio's
+    // preview link did it).
+    let id = shared.borrow_mut().tabs.open_from("about:blank", true, opener);
     let view = make_view(shared, id, Some(parent));
     attach(shared, id, view.clone());
-    show_active(shared);
-    save_session(shared);
+    {
+        let s = shared.clone();
+        view.connect_ready_to_show(move |_| {
+            {
+                let mut a = s.borrow_mut();
+                if let Some(i) = a.tabs.index_of(id) { a.tabs.active = i; }
+            }
+            show_active(&s);
+            save_session(&s);
+        });
+    }
     view
 }
 
