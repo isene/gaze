@@ -1746,7 +1746,7 @@ const PAGE_CSS: &str = "body{background:#1e1e1e;color:#d0d0d0;font:15px/1.5 sans
  .mode b{color:#e0b93a;display:block;margin-bottom:.15em}\
  .cards{display:grid;grid-template-columns:1fr 1fr;gap:0 1.4em;align-items:start}.card{background:#242424;border-radius:8px;padding:.1em 1.1em .7em;margin-bottom:1.4em}\
  .card h2{margin:.7em 0 .3em;font-size:1.15em}.card td{font-size:14px;padding:2px 12px 2px 0}.card .k span{display:inline-block;max-width:15em}.card code,.card kbd{white-space:nowrap}\
- .more{columns:2;column-gap:2.5em;margin-top:1em}.more h2{break-after:avoid;margin-top:1em}.more p{margin-top:.3em}";
+ .more{display:grid;grid-template-columns:1fr 1fr;gap:0 2.5em;align-items:start;margin-top:1em}.more h2{margin-top:1em}.more p{margin-top:.3em}";
 
 /// The logo, drawn into the help page.
 const LOGO: &str = include_str!("../img/gaze.svg");
@@ -1846,7 +1846,7 @@ fn help_page() -> String {
 names are plain characters, else <code>&lt;Ctrl-d&gt;</code>, <code>&lt;Alt-1&gt;</code>, <code>&lt;Shift-Left&gt;</code>, <code>&lt;Space&gt;</code>.</div>
 </div>
 <div class=cards>{cards}</div>
-<div class=more>
+<div class=more><div>
 <h2>Tab groups</h2>
 <p>A group is a named, coloured run of tabs, as in Firefox. A tab opened from a grouped tab joins the group.
 A folded group shows as its name and a count; its tabs are skipped until it is unfolded. A group with no tabs
@@ -1857,7 +1857,7 @@ the <code>groups:</code> list in config.yml names groups that exist from the sta
 the commands; after <code>group</code> and its kin it is the group names, after <code>group-color</code> the colours.
 <kbd>o</kbd> lists the pages you were at last; typing narrows the list to pages whose URL or title holds every word,
 bookmarks (★) first. Visits are kept in <code>~/.gaze/history</code>, the last five thousand pages.</p>
-<h2>Passwords</h2>
+</div><div><h2>Passwords</h2>
 <p>Logins live in <code>~/.gaze/passwords</code>, sealed with a master password you choose the first time.
 A login form is filled when the page loads; after a sign-in with a new or changed password gaze asks whether to save it.
 A site's HTTP password dialog is answered from the store too, when it is open.</p>
@@ -1869,6 +1869,6 @@ to <code>~/.gaze/adblock/hosts</code> and compiles it into a WebKit content filt
 <p><code>~/.gaze/config.yml</code>: home page, search engine, download folder, zoom, scroll step, ad blocking, text size of the bars.
 <code>~/.gaze/keys.yml</code>: your key changes. <code>~/.gaze/bookmarks</code>: one per line.
 <code>~/.gaze/session.json</code>: the open tabs and groups.</p>
-</div>
+</div></div>
 "#, logo = LOGO, ver = env!("CARGO_PKG_VERSION"), cards = cards)
 }
