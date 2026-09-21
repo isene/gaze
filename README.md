@@ -21,7 +21,7 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 | `j` `k` `h` `l`, `gg`, `G`, `Ctrl-d` / `Ctrl-u`, `Space` | Scroll |
 | `/`, `n` / `N` | Find on the page |
 | `Ctrl-f` | Only the page: hide the tab bar and the status line; again to bring them back |
-| `D` | Dark pages on or off (see Dark pages) |
+| `D` | Dark pages on or off for this site, kept for next time (see Dark pages) |
 | `i`, `gi` | Insert mode (type into the page) / focus the first field. A click on a field enters it too; `Tab` moves to the next field; `Esc` leaves |
 | `yy`, `pp` / `PP` | Copy the URL; open what the clipboard holds here / in a new tab |
 | `t`, `d`, `u` | New tab, close tab, bring back the last closed |
@@ -70,7 +70,9 @@ On by default; `adblock: false` in the config turns it off. The first start fetc
 
 ## Dark pages
 
-On by default; `dark: false` in the config turns it off, and `D` toggles it while you read.
+On by default; `dark: false` in the config turns it off.
+
+`D` turns dark pages on or off for the site you are on, and remembers it. A site you have set keeps its answer on every later visit. Everything else follows the default. `:dark-default` flips that default, and the sites you set keep theirs.
 
 Every site is asked for its dark style first, the way a dark desktop asks. A site that has one uses its own colours. A site with none is turned around instead. The page is inverted and the hues turned back, then pictures and video are inverted a second time. Text goes light on dark, blue links stay blue, photos keep their colours.
 
@@ -100,6 +102,7 @@ Runtime: WebKitGTK 6.0 and GTK 4. gaze drops `gl` from `GDK_DISABLE` for itself:
 - `~/.gaze/config.yml`: home page, search engine (`%s` is the query), download folder, zoom, scroll step, ad blocking, dark pages, text size of the bars (`font_size`, in pixels), standing groups.
 - `~/.gaze/keys.yml`: the key bindings you changed.
 - `~/.gaze/bookmarks`: the bookmarks, one per line.
+- `~/.gaze/dark`: the sites where dark pages differ from the default, one `<site> on` or `<site> off` per line.
 - `~/.gaze/history`: one line per visit, folded to one entry per page when read.
 - `~/.gaze/session.json`: the open tabs and groups, written when they change and read at start. Only the current tab loads at start; the others load when you go to them.
 - `~/.gaze/passwords`: the sealed logins.

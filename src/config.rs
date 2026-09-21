@@ -117,6 +117,46 @@ pub fn load() -> Config {
     }
 }
 
+/// Sites where dark pages differ from the default, kept in
+/// `~/.gaze/dark`, one `<site> on` or `<site> off` per line.
+pub struct DarkSites {
+    pub sites: std::collections::BTreeMap<String, bool>,
+    path: PathBuf,
+}
+
+impl DarkSites {
+    pub fn load(path: PathBuf) -> DarkSites {
+        let mut sites = std::collections::BTreeMap::new();
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            for line in text.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') { continue; }
+                let mut word = line.split_whitespace();
+                if let (Some(site), Some(state)) = (word.next(), word.next()) {
+                    sites.insert(site.to_string(), state == "on");
+                }
+            }
+        }
+        DarkSites { sites, path }
+    }
+
+    pub fn get(&self, site: &str) -> Option<bool> { self.sites.get(site).copied() }
+
+    /// True when at least one site asks for dark pages, whatever the
+    /// default says. The page script is needed then.
+    pub fn any_on(&self) -> bool { self.sites.values().any(|on| *on) }
+
+    pub fn set(&mut self, site: &str, on: bool) {
+        self.sites.insert(site.to_string(), on);
+        let mut out = String::from("# Sites where dark pages differ from the default in config.yml.\n");
+        for (site, on) in &self.sites {
+            out.push_str(site);
+            out.push_str(if *on { " on\n" } else { " off\n" });
+        }
+        let _ = std::fs::write(&self.path, out);
+    }
+}
+
 /// Write the dark-mode flag back to config.yml, leaving the rest of the
 /// file, comments and all, as it stands.
 pub fn save_dark(on: bool) {

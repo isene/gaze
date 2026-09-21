@@ -78,6 +78,7 @@ struct App {
     save_pending: bool,
     keymap: keys::Keymap,
     marks: bookmarks::Bookmarks,
+    dark_sites: config::DarkSites,
     hist: history::History,
     /// What the command line offers right now, and which one Tab picked.
     offers: Vec<Offer>,
@@ -291,13 +292,14 @@ fn build(app: &gtk::Application) -> Shared {
     let store = Store::new(dir.join("passwords"));
     let keymap = keys::Keymap::load(dir.join("keys.yml"));
     let marks = bookmarks::Bookmarks::load(dir.join("bookmarks"));
+    let dark_sites = config::DarkSites::load(dir.join("dark"));
     let shared: Shared = Rc::new(RefCell::new(App {
         ui: Ui { window: window.clone(), tabbar, stack, bottom, status, right, entry: entry.clone(), completion },
         cfg, tabs, views: HashMap::new(), session, settings,
         mode: Mode::Normal, keys: String::new(), ask: Ask::Command, prompt: None,
         message: String::new(), hover: String::new(), store, fill_at: HashMap::new(),
         closed: Vec::new(), find: String::new(), session_path, save_pending: false,
-        keymap, marks, hist, offers: Vec::new(), selected: None, setting_text: false, filter: None,
+        keymap, marks, dark_sites, hist, offers: Vec::new(), selected: None, setting_text: false, filter: None,
     }));
 
     let keys = gtk::EventControllerKey::new();
@@ -358,11 +360,11 @@ fn style(font_size: u32) {
 fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
     let (session, settings, zoom, filter, dark) = {
         let a = shared.borrow();
-        (a.session.clone(), a.settings.clone(), a.cfg.zoom, a.filter.clone(), a.cfg.dark)
+        (a.session.clone(), a.settings.clone(), a.cfg.zoom, a.filter.clone(), dark_wanted(&a))
     };
     let ucm = UserContentManager::new();
     ucm.add_script(&page_script());
-    if dark { ucm.add_script(&dark_script()); }
+    if dark { ucm.add_script(&dark_script(&shared.borrow())); }
     ucm.register_script_message_handler("gaze", None);
     {
         let s = shared.clone();
@@ -588,12 +590,43 @@ fn page_script() -> UserScript {
     UserScript::new(js::PAGE, UserContentInjectedFrames::AllFrames, UserScriptInjectionTime::Start, &[], &[])
 }
 
+/// The name a dark-pages setting is filed under: the site's host with
+/// no `www.`, or the scheme for a page that has no host of its own.
+fn site_key(uri: &str) -> String {
+    let Some((scheme, rest)) = uri.split_once("://") else {
+        return uri.split(':').next().unwrap_or("page").to_ascii_lowercase();
+    };
+    if scheme != "http" && scheme != "https" { return scheme.to_ascii_lowercase(); }
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = host.rsplit('@').next().unwrap_or(host);
+    let host = host.split(':').next().unwrap_or(host);
+    host.trim_start_matches("www.").to_ascii_lowercase()
+}
+
+/// Whether this page gets dark treatment: what the site was filed
+/// under, or the default from config.yml.
+fn dark_here(a: &App, uri: &str) -> bool {
+    a.dark_sites.get(&site_key(uri)).unwrap_or(a.cfg.dark)
+}
+
+/// The dark script with the site list and the default in front of it.
+fn dark_source(a: &App) -> String {
+    let filed: serde_json::Map<String, serde_json::Value> = a.dark_sites.sites.iter()
+        .map(|(site, on)| (site.clone(), serde_json::Value::Bool(*on))).collect();
+    format!("window.__gazeDarkSites={};window.__gazeDarkDefault={};{}",
+            serde_json::Value::Object(filed), a.cfg.dark, js::DARK)
+}
+
 /// The dark stylesheet goes on the page itself, never on a frame inside
 /// it: the page's own filter already covers those, and a second one
 /// would turn them back to light.
-fn dark_script() -> UserScript {
-    UserScript::new(js::DARK, UserContentInjectedFrames::TopFrame, UserScriptInjectionTime::Start, &[], &[])
+fn dark_script(a: &App) -> UserScript {
+    UserScript::new(&dark_source(a), UserContentInjectedFrames::TopFrame, UserScriptInjectionTime::Start, &[], &[])
 }
+
+/// True while any page could want dark treatment. With the default off
+/// and no site asking for it, the script is never put on a page.
+fn dark_wanted(a: &App) -> bool { a.cfg.dark || a.dark_sites.any_on() }
 
 /// A dark GTK theme is what WebKit reports to a page as
 /// `prefers-color-scheme: dark`, so every site with a dark style of its
@@ -602,25 +635,35 @@ fn prefer_dark(on: bool) {
     if let Some(s) = gtk::Settings::default() { s.set_gtk_application_prefer_dark_theme(on); }
 }
 
-/// Dark mode on or off, for the pages open now and the ones to come.
+/// Dark pages on or off for the site you are on, kept for next time.
+/// Other tabs are left as they are; only their next page reads the
+/// changed list.
 fn toggle_dark(shared: &Shared) {
-    let on = {
-        let mut a = shared.borrow_mut();
-        a.cfg.dark = !a.cfg.dark;
-        a.cfg.dark
+    let (site, on) = {
+        let a = shared.borrow();
+        let uri = a.tabs.current().map(|t| t.uri.clone()).unwrap_or_default();
+        let site = site_key(&uri);
+        let on = !dark_here(&a, &uri);
+        (site, on)
     };
-    prefer_dark(on);
-    let views: Vec<WebView> = shared.borrow().views.values().cloned().collect();
-    for v in &views {
+    let here = current_view(&shared.borrow());
+    {
+        let mut a = shared.borrow_mut();
+        a.dark_sites.set(&site, on);
+    }
+    let (source, wanted) = {
+        let a = shared.borrow();
+        (dark_source(&a), dark_wanted(&a))
+    };
+    for v in shared.borrow().views.values() {
         if let Some(ucm) = v.user_content_manager() {
             ucm.remove_all_scripts();
             ucm.add_script(&page_script());
-            if on { ucm.add_script(&dark_script()); }
+            if wanted { ucm.add_script(&UserScript::new(&source, UserContentInjectedFrames::TopFrame, UserScriptInjectionTime::Start, &[], &[])); }
         }
-        run_js(v, if on { js::DARK } else { js::UNDARK });
     }
-    config::save_dark(on);
-    set_message(shared, if on { "Dark pages on" } else { "Dark pages off" });
+    if let Some(v) = here { run_js(&v, if on { &source } else { js::UNDARK }); }
+    set_message(shared, &format!("Dark pages {} for {}", if on { "on" } else { "off" }, site));
 }
 
 fn run_js(view: &WebView, code: &str) {
@@ -1309,6 +1352,12 @@ fn run_command(shared: &Shared, line: &str) {
         "paste-tab" => paste_and_open(shared, true),
         "fullscreen" => { let a = shared.borrow(); let on = a.ui.tabbar.is_visible(); a.ui.tabbar.set_visible(!on); a.ui.bottom.set_visible(!on); }
         "dark" => toggle_dark(shared),
+        "dark-default" => {
+            let on = { let mut a = shared.borrow_mut(); a.cfg.dark = !a.cfg.dark; a.cfg.dark };
+            prefer_dark(on);
+            config::save_dark(on);
+            set_message(shared, &format!("Dark pages {} by default; the sites you set keep theirs", if on { "on" } else { "off" }));
+        }
         "zoom-in" => zoom(shared, 0.1),
         "zoom-out" => zoom(shared, -0.1),
         "zoom-reset" => { let z = shared.borrow().cfg.zoom; with_view(shared, |v| v.set_zoom_level(z)); set_message(shared, "Zoom reset"); }
@@ -1827,7 +1876,8 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Copy, zoom, view", "yank url|title", "copy to the clipboard"), ("Copy, zoom, view", "paste", "open what the clipboard holds here"), ("Copy, zoom, view", "paste-tab", "the same in a new tab"),
     ("Copy, zoom, view", "zoom-in", ""), ("Copy, zoom, view", "zoom-out", ""), ("Copy, zoom, view", "zoom-reset", ""), ("Copy, zoom, view", "zoom <percent>", ""),
     ("Copy, zoom, view", "fullscreen", "hide the tab bar and the status line; again to bring them back"),
-    ("Copy, zoom, view", "dark", "dark pages: every site is asked for its dark style, and the ones with none are turned around"),
+    ("Copy, zoom, view", "dark", "dark pages on or off for this site, kept for next time"),
+    ("Copy, zoom, view", "dark-default", "the same for every site you have not set"),
     ("Tabs", "tab-next", "the next visible tab"), ("Tabs", "tab-prev", "the previous one"),
     ("Tabs", "tab <n>", "the n-th visible tab"), ("Tabs", "tab-first", ""), ("Tabs", "tab-last", ""),
     ("Tabs", "tab-move +1|-1|<n>", "move this tab"), ("Tabs", "close", "close this tab"), ("Tabs", "undo", "bring back the last closed tab"),

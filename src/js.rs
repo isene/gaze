@@ -218,6 +218,16 @@ pub const SCROLL_BOTTOM: &str = "window.scrollTo({top: document.documentElement.
 /// as they should. Added to a view only while dark mode is on.
 pub const DARK: &str = r#"
 (function () {
+  // Dark pages can be off for this site alone. gaze puts the list and
+  // the default in front of this script; a page filed under neither
+  // follows the default.
+  const filed = window.__gazeDarkSites || {};
+  const site = (location.protocol === 'http:' || location.protocol === 'https:')
+    ? location.hostname.replace(/^www\./, '').toLowerCase()
+    : location.protocol.replace(':', '').toLowerCase();
+  const want = Object.prototype.hasOwnProperty.call(filed, site)
+    ? filed[site] : !!window.__gazeDarkDefault;
+  if (!want) return;
   const P = 'data-gaze-photo', G = 'data-gaze-backdrop';
   const TURN = '{filter:invert(1) hue-rotate(180deg)}';
   const MEDIA = 'img,video,canvas,embed,object,iframe';
