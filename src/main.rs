@@ -114,10 +114,21 @@ fn main() {
     // every core and burns three to five times the CPU of one thread,
     // for no smoother page. One thread it is, unless you say otherwise.
     if std::env::var_os("LP_NUM_THREADS").is_none() { std::env::set_var("LP_NUM_THREADS", "1"); }
-    // On a desktop that forces software GL (LIBGL_ALWAYS_SOFTWARE), WebKit
-    // paints its tiles on the CPU rather than through that GL: a third
-    // less work for the same page. With a real GPU, WebKit's own choice
-    // stands.
+    // A page is drawn on the CPU, not on the graphics chip. Measured on
+    // an Intel laptop through a plain X server, one load of a long
+    // article costs gaze 2.4 to 4.0 seconds on the CPU and 11.4 to 12.5
+    // on the chip. A page is a great many small paints, and each one
+    // pays the driver again; the copy back to a window that is not
+    // composited pays once more. Video is the other way round and does
+    // not come through here: it goes to the player.
+    //
+    // GAZE_GPU=1 hands it back to the chip, for a desktop with a
+    // compositor where the picture never comes back over the bus.
+    if std::env::var_os("GAZE_GPU").is_none() {
+        std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
+    }
+    // WebKit then paints its tiles straight on the CPU instead of
+    // through that software GL: a third less work for the same page.
     if std::env::var_os("LIBGL_ALWAYS_SOFTWARE").is_some() && std::env::var_os("WEBKIT_SKIA_ENABLE_CPU_RENDERING").is_none() {
         std::env::set_var("WEBKIT_SKIA_ENABLE_CPU_RENDERING", "1");
     }

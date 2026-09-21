@@ -88,6 +88,14 @@ A video page goes to `mpv` instead of the browser: a click on a YouTube link, a 
 
 `video_player` in the config names the program, empty keeps videos in gaze, and `video_urls` lists how a video page's address starts.
 
+## Graphics
+
+gaze draws pages on the processor, not on the graphics chip, and sets that for itself at startup.
+
+A page is a great many small paints, and each one pays the driver again. On an Intel laptop through a plain X server, one load of a long article costs gaze 2.4 to 4.0 seconds on the processor and 11.4 to 12.5 on the chip. Video is the other way round, and video does not come through here: it goes to the player.
+
+`GAZE_GPU=1` hands the drawing back to the chip. That is the right choice on a desktop with a compositor, where the picture never comes back over the bus.
+
 ## Install
 
 ```bash
