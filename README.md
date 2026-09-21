@@ -84,7 +84,7 @@ It costs something: about a fifth more work in the page for a big article, since
 
 ## Video
 
-A video page goes to `mpv` instead of the browser: a click on a YouTube link, a typed or pasted address, a link opened in a new tab. YouTube's own pages stay in gaze; only the watch pages leave. `v` sends the page you are on to `mpv`, for a video you reached inside YouTube itself. `mpv` plays YouTube through `yt-dlp`, and it costs about half the battery of the same video in a browser.
+A video page goes to `mpv` instead of the browser: a click on a YouTube link, a typed or pasted address, a link opened in a new tab. YouTube's own pages stay in gaze; only the watch pages leave. `v` sends the page you are on to `mpv`, for a video you reached inside YouTube itself. `mpv` plays YouTube through `yt-dlp`, and it costs about half the battery of the same video in a browser. Keep `yt-dlp` current. An old one is refused by YouTube, and then nothing happens at all: `mpv` starts, fails and exits.
 
 `video_player` in the config names the program, empty keeps videos in gaze, and `video_urls` lists how a video page's address starts.
 

@@ -1,6 +1,6 @@
 [package]
 name = "gaze"
-version = "0.3.20"
+version = "0.3.21"
 edition = "2021"
 description = "Looking out onto the web: a keyboard-driven browser around WebKitGTK"
 license = "Unlicense"

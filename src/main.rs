@@ -508,7 +508,16 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
         // window.open(): give the page a real window as a new tab, so
         // sign-in popups that report back to their opener keep working.
         let s = shared.clone();
-        view.connect_create(move |parent, _| {
+        view.connect_create(move |parent, action| {
+            // A page that opens a video in a window of its own gets no
+            // window at all: the player takes it, and no empty tab is
+            // left behind.
+            if let Some(uri) = action.request().and_then(|r| r.uri()) {
+                if is_video(&s, &uri) {
+                    play(&s, &uri);
+                    return None;
+                }
+            }
             let popup = popup_tab(&s, parent);
             Some(popup.upcast())
         });
@@ -782,7 +791,12 @@ fn play(shared: &Shared, uri: &str) {
     let player = shared.borrow().cfg.video_player.clone();
     match std::process::Command::new(&player).arg(uri)
         .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
-        Ok(_) => set_message(shared, &format!("{}: {}", player, uri)),
+        Ok(child) => {
+            // gaze never waits for the player, so let glib collect it.
+            // Without this each video left a dead entry behind.
+            glib::child_watch_add(glib::Pid(child.id() as i32), |_, _| {});
+            set_message(shared, &format!("{}: {}", player, uri));
+        }
         Err(e) => set_message(shared, &format!("{}: {}", player, e)),
     }
 }
