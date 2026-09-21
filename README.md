@@ -21,6 +21,7 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 | `j` `k` `h` `l`, `gg`, `G`, `Ctrl-d` / `Ctrl-u`, `Space` | Scroll |
 | `/`, `n` / `N` | Find on the page |
 | `Ctrl-f` | Only the page: hide the tab bar and the status line; again to bring them back |
+| `D` | Dark pages on or off (see Dark pages) |
 | `i`, `gi` | Insert mode (type into the page) / focus the first field. A click on a field enters it too; `Tab` moves to the next field; `Esc` leaves |
 | `yy`, `pp` / `PP` | Copy the URL; open what the clipboard holds here / in a new tab |
 | `t`, `d`, `u` | New tab, close tab, bring back the last closed |
@@ -67,6 +68,14 @@ Logins live in `~/.gaze/passwords`, one file sealed with ChaCha20-Poly1305 under
 
 On by default; `adblock: false` in the config turns it off. The first start fetches [Steven Black's hosts list](https://github.com/StevenBlack/hosts) to `~/.gaze/adblock/hosts` and compiles it into a WebKit content filter, which takes a few seconds once. Every domain on the list is then blocked for every request. `:adblock-update` fetches the list again.
 
+## Dark pages
+
+On by default; `dark: false` in the config turns it off, and `D` toggles it while you read.
+
+Every site is asked for its dark style first, the way a dark desktop asks. A site that has one uses its own colours. A site with none is turned around instead. The page is inverted and the hues turned back, then pictures and video are inverted a second time. Text goes light on dark, blue links stay blue, photos keep their colours.
+
+Turning a page around is a blunt tool. A dark band on an otherwise light page comes out light, so a site with a dark header looks odd. `D` gets you out of it.
+
 ## Video
 
 A video page goes to `mpv` instead of the browser: a click on a YouTube link, a typed or pasted address, a link opened in a new tab. YouTube's own pages stay in gaze; only the watch pages leave. `v` sends the page you are on to `mpv`, for a video you reached inside YouTube itself. `mpv` plays YouTube through `yt-dlp`, and it costs about half the battery of the same video in a browser.
@@ -84,7 +93,7 @@ Runtime: WebKitGTK 6.0 and GTK 4. gaze drops `gl` from `GDK_DISABLE` for itself:
 
 ## Files
 
-- `~/.gaze/config.yml`: home page, search engine (`%s` is the query), download folder, zoom, scroll step, ad blocking, text size of the bars (`font_size`, in pixels), standing groups.
+- `~/.gaze/config.yml`: home page, search engine (`%s` is the query), download folder, zoom, scroll step, ad blocking, dark pages, text size of the bars (`font_size`, in pixels), standing groups.
 - `~/.gaze/keys.yml`: the key bindings you changed.
 - `~/.gaze/bookmarks`: the bookmarks, one per line.
 - `~/.gaze/history`: one line per visit, folded to one entry per page when read.

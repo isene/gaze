@@ -209,3 +209,40 @@ pub fn scroll(dx: i32, dy: f64, page: bool) -> String {
 
 pub const SCROLL_TOP: &str = "window.scrollTo({top: 0, behavior: 'instant'})";
 pub const SCROLL_BOTTOM: &str = "window.scrollTo({top: document.documentElement.scrollHeight, behavior: 'instant'})";
+
+/// Dark mode for pages that have none of their own. gaze first asks for
+/// a dark page through the GTK theme, which sites with a dark style pick
+/// up as `prefers-color-scheme: dark`. What is left light after that is
+/// turned around here: the whole page is inverted and the hues turned
+/// back, then pictures and video are inverted a second time so they look
+/// as they should. Added to a view only while dark mode is on.
+pub const DARK: &str = r#"
+(function () {
+  const CSS = 'html{filter:invert(1) hue-rotate(180deg);background:#fff}' +
+    'img,video,canvas,embed,object,iframe{filter:invert(1) hue-rotate(180deg)}';
+  const colour = el => {
+    if (!el) return null;
+    const m = getComputedStyle(el).backgroundColor.match(/[\d.]+/g);
+    if (!m) return null;
+    if (m.length > 3 && +m[3] < 0.5) return null;
+    return 0.2126 * +m[0] + 0.7152 * +m[1] + 0.0722 * +m[2];
+  };
+  const light = () => {
+    const b = colour(document.body);
+    const h = colour(document.documentElement);
+    return (b !== null ? b : h !== null ? h : 255) > 140;
+  };
+  const apply = () => {
+    if (document.getElementById('__gaze_dark') || !light()) return;
+    const s = document.createElement('style');
+    s.id = '__gaze_dark';
+    s.textContent = CSS;
+    (document.head || document.documentElement).appendChild(s);
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', apply, { once: true });
+  else apply();
+})();
+"#;
+
+/// Take the dark stylesheet off a page again.
+pub const UNDARK: &str = "{ const s = document.getElementById('__gaze_dark'); if (s) s.remove(); }";

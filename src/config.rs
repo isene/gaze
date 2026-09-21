@@ -18,6 +18,9 @@ pub struct Config {
     pub scroll_step: i32,
     /// Block the domains of Steven Black's hosts list.
     pub adblock: bool,
+    /// Ask pages for their dark style, and turn around the ones that
+    /// have none.
+    pub dark: bool,
     /// Text size of the tab bar, status bar and command line, in pixels.
     pub font_size: u32,
     /// Tab groups that exist from the start, made when missing.
@@ -46,6 +49,7 @@ impl Default for Config {
             zoom: 1.0,
             scroll_step: 80,
             adblock: true,
+            dark: true,
             font_size: 14,
             groups: Vec::new(),
             video_player: "mpv".into(),
@@ -63,6 +67,9 @@ downloads: ~/Downloads
 zoom: 1.0
 scroll_step: 80
 adblock: true
+# Dark pages: ask every site for its dark style, and turn around the ones
+# that have none. D toggles it.
+dark: true
 # Text size of the tab bar, status bar and command line, in pixels:
 font_size: 14
 # A video page opens in this program instead of the browser; empty keeps it in gaze.
@@ -108,6 +115,21 @@ pub fn load() -> Config {
             Config::default()
         }
     }
+}
+
+/// Write the dark-mode flag back to config.yml, leaving the rest of the
+/// file, comments and all, as it stands.
+pub fn save_dark(on: bool) {
+    let path = gaze_dir().join("config.yml");
+    let Ok(text) = std::fs::read_to_string(&path) else { return };
+    let line = format!("dark: {}", on);
+    let mut out: Vec<&str> = Vec::new();
+    let mut found = false;
+    for l in text.lines() {
+        if l.starts_with("dark:") { out.push(&line); found = true; } else { out.push(l); }
+    }
+    if !found { out.push(&line); }
+    let _ = std::fs::write(&path, out.join("\n") + "\n");
 }
 
 /// What you typed in the open prompt, as a URI: a URL as it is, a host

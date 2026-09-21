@@ -240,6 +240,7 @@ fn build(app: &gtk::Application) -> Shared {
     if let Some(ctx) = WebContext::default() {
         ctx.register_uri_scheme("gaze", serve_internal);
     }
+    prefer_dark(cfg.dark);
     style(cfg.font_size);
 
     let window = gtk::ApplicationWindow::builder()
@@ -355,12 +356,13 @@ fn style(font_size: u32) {
 /// listens to. Each view gets its own content manager so a message from
 /// the page says which tab sent it.
 fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
-    let (session, settings, zoom, filter) = {
+    let (session, settings, zoom, filter, dark) = {
         let a = shared.borrow();
-        (a.session.clone(), a.settings.clone(), a.cfg.zoom, a.filter.clone())
+        (a.session.clone(), a.settings.clone(), a.cfg.zoom, a.filter.clone(), a.cfg.dark)
     };
     let ucm = UserContentManager::new();
-    ucm.add_script(&UserScript::new(js::PAGE, UserContentInjectedFrames::AllFrames, UserScriptInjectionTime::Start, &[], &[]));
+    ucm.add_script(&page_script());
+    if dark { ucm.add_script(&dark_script()); }
     ucm.register_script_message_handler("gaze", None);
     {
         let s = shared.clone();
@@ -580,6 +582,45 @@ fn on_download(download: &Download, dir: PathBuf) {
 
 fn current_view(a: &App) -> Option<WebView> {
     a.tabs.current().and_then(|t| a.views.get(&t.id)).cloned()
+}
+
+fn page_script() -> UserScript {
+    UserScript::new(js::PAGE, UserContentInjectedFrames::AllFrames, UserScriptInjectionTime::Start, &[], &[])
+}
+
+/// The dark stylesheet goes on the page itself, never on a frame inside
+/// it: the page's own filter already covers those, and a second one
+/// would turn them back to light.
+fn dark_script() -> UserScript {
+    UserScript::new(js::DARK, UserContentInjectedFrames::TopFrame, UserScriptInjectionTime::Start, &[], &[])
+}
+
+/// A dark GTK theme is what WebKit reports to a page as
+/// `prefers-color-scheme: dark`, so every site with a dark style of its
+/// own switches to it.
+fn prefer_dark(on: bool) {
+    if let Some(s) = gtk::Settings::default() { s.set_gtk_application_prefer_dark_theme(on); }
+}
+
+/// Dark mode on or off, for the pages open now and the ones to come.
+fn toggle_dark(shared: &Shared) {
+    let on = {
+        let mut a = shared.borrow_mut();
+        a.cfg.dark = !a.cfg.dark;
+        a.cfg.dark
+    };
+    prefer_dark(on);
+    let views: Vec<WebView> = shared.borrow().views.values().cloned().collect();
+    for v in &views {
+        if let Some(ucm) = v.user_content_manager() {
+            ucm.remove_all_scripts();
+            ucm.add_script(&page_script());
+            if on { ucm.add_script(&dark_script()); }
+        }
+        run_js(v, if on { js::DARK } else { js::UNDARK });
+    }
+    config::save_dark(on);
+    set_message(shared, if on { "Dark pages on" } else { "Dark pages off" });
 }
 
 fn run_js(view: &WebView, code: &str) {
@@ -1267,6 +1308,7 @@ fn run_command(shared: &Shared, line: &str) {
         "paste" => paste_and_open(shared, false),
         "paste-tab" => paste_and_open(shared, true),
         "fullscreen" => { let a = shared.borrow(); let on = a.ui.tabbar.is_visible(); a.ui.tabbar.set_visible(!on); a.ui.bottom.set_visible(!on); }
+        "dark" => toggle_dark(shared),
         "zoom-in" => zoom(shared, 0.1),
         "zoom-out" => zoom(shared, -0.1),
         "zoom-reset" => { let z = shared.borrow().cfg.zoom; with_view(shared, |v| v.set_zoom_level(z)); set_message(shared, "Zoom reset"); }
@@ -1785,6 +1827,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Copy, zoom, view", "yank url|title", "copy to the clipboard"), ("Copy, zoom, view", "paste", "open what the clipboard holds here"), ("Copy, zoom, view", "paste-tab", "the same in a new tab"),
     ("Copy, zoom, view", "zoom-in", ""), ("Copy, zoom, view", "zoom-out", ""), ("Copy, zoom, view", "zoom-reset", ""), ("Copy, zoom, view", "zoom <percent>", ""),
     ("Copy, zoom, view", "fullscreen", "hide the tab bar and the status line; again to bring them back"),
+    ("Copy, zoom, view", "dark", "dark pages: every site is asked for its dark style, and the ones with none are turned around"),
     ("Tabs", "tab-next", "the next visible tab"), ("Tabs", "tab-prev", "the previous one"),
     ("Tabs", "tab <n>", "the n-th visible tab"), ("Tabs", "tab-first", ""), ("Tabs", "tab-last", ""),
     ("Tabs", "tab-move +1|-1|<n>", "move this tab"), ("Tabs", "close", "close this tab"), ("Tabs", "undo", "bring back the last closed tab"),
