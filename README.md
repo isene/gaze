@@ -74,7 +74,11 @@ On by default; `dark: false` in the config turns it off, and `D` toggles it whil
 
 Every site is asked for its dark style first, the way a dark desktop asks. A site that has one uses its own colours. A site with none is turned around instead. The page is inverted and the hues turned back, then pictures and video are inverted a second time. Text goes light on dark, blue links stay blue, photos keep their colours.
 
+A picture set as an element's background is no `<img>`. CSS cannot ask for one, so gaze looks for them as the page settles. A box big enough to hold a picture is turned back. A small one is an icon, part of the writing, and turns with it. A picture behind the whole page is turned back on its own. What sits on it is then turned once more, so the page stays dark.
+
 Turning a page around is a blunt tool. A dark band on an otherwise light page comes out light, so a site with a dark header looks odd. `D` gets you out of it.
+
+It costs something: about a fifth more work in the page for a big article, since every layer is painted twice.
 
 ## Video
 

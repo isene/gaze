@@ -218,8 +218,16 @@ pub const SCROLL_BOTTOM: &str = "window.scrollTo({top: document.documentElement.
 /// as they should. Added to a view only while dark mode is on.
 pub const DARK: &str = r#"
 (function () {
-  const CSS = 'html{filter:invert(1) hue-rotate(180deg);background:#fff}' +
-    'img,video,canvas,embed,object,iframe{filter:invert(1) hue-rotate(180deg)}';
+  const P = 'data-gaze-photo', G = 'data-gaze-backdrop';
+  const TURN = '{filter:invert(1) hue-rotate(180deg)}';
+  const MEDIA = 'img,video,canvas,embed,object,iframe';
+  const each = (pre, post) => MEDIA.split(',').map(t => pre + t + post).join(',');
+  const CSS =
+    'html{filter:invert(1) hue-rotate(180deg);background:#fff}' +
+    MEDIA + ',[' + P + '],[' + G + ']' + TURN +
+    '[' + G + ']>*' + TURN +
+    each('[' + G + ']>', '') + '{filter:none}' +
+    each('[' + P + '] ', '') + '{filter:none}';
   const colour = el => {
     if (!el) return null;
     const m = getComputedStyle(el).backgroundColor.match(/[\d.]+/g);
@@ -227,22 +235,86 @@ pub const DARK: &str = r#"
     if (m.length > 3 && +m[3] < 0.5) return null;
     return 0.2126 * +m[0] + 0.7152 * +m[1] + 0.0722 * +m[2];
   };
+  // How bright the page looks where you are reading it. Asking the body
+  // or the root is not enough: a site can paint the root dark and still
+  // lay every box of text on white. So a few points across the window
+  // are sampled, and each one climbs to the first thing with a colour
+  // behind it.
+  const behind = (x, y) => {
+    let el = document.elementFromPoint(x, y);
+    while (el) {
+      const c = colour(el);
+      if (c !== null) return c;
+      el = el.parentElement;
+    }
+    return null;
+  };
   const light = () => {
-    const b = colour(document.body);
-    const h = colour(document.documentElement);
-    return (b !== null ? b : h !== null ? h : 255) > 140;
+    const w = innerWidth, h = innerHeight;
+    const spots = [[0.5, 0.3], [0.5, 0.6], [0.5, 0.9], [0.2, 0.5], [0.8, 0.5]];
+    let sum = 0, seen = 0;
+    for (const [fx, fy] of spots) {
+      const c = behind(Math.round(w * fx), Math.round(h * fy));
+      if (c !== null) { sum += c; seen++; }
+    }
+    if (!seen) {
+      const c = colour(document.body);
+      return c === null ? true : c > 140;
+    }
+    return sum / seen > 140;
+  };
+  // A picture set as an element's background is no <img>, and CSS cannot
+  // ask for one, so the elements carrying one are marked here. Each is
+  // turned back so the picture keeps its colours, and the walk stops
+  // there: a second turn inside the first would undo it.
+  //
+  // An element that fills the window is the page itself with a picture
+  // behind it. Turning that one back would take the whole page light
+  // again, so what it holds is turned once more and stays dark.
+  const photos = root => {
+    const room = innerWidth * innerHeight;
+    const walk = el => {
+      for (let n = el.firstElementChild; n; n = n.nextElementSibling) {
+        const bg = getComputedStyle(n).backgroundImage;
+        if (bg === 'none' || bg.indexOf('url(') < 0) { walk(n); continue; }
+        const box = n.getBoundingClientRect();
+        // An icon drawn as a background is part of the writing and turns
+        // with it. Only a box big enough to hold a picture is turned back.
+        if (box.width < 48 || box.height < 48) { walk(n); continue; }
+        n.setAttribute(box.width * box.height > 0.6 * room ? G : P, '');
+      }
+    };
+    walk(root);
   };
   const apply = () => {
-    if (document.getElementById('__gaze_dark') || !light()) return;
-    const s = document.createElement('style');
-    s.id = '__gaze_dark';
-    s.textContent = CSS;
-    (document.head || document.documentElement).appendChild(s);
+    if (!document.body) return;
+    const on = light();
+    const sheet = document.getElementById('__gaze_dark');
+    // The first look comes before the page is fully laid out, so the
+    // second one may find it was wrong and take the sheet off again.
+    if (!on) {
+      if (sheet) {
+        sheet.remove();
+        document.querySelectorAll('[' + P + '],[' + G + ']').forEach(e => {
+          e.removeAttribute(P); e.removeAttribute(G);
+        });
+      }
+      return;
+    }
+    if (!sheet) {
+      const s = document.createElement('style');
+      s.id = '__gaze_dark';
+      s.textContent = CSS;
+      (document.head || document.documentElement).appendChild(s);
+    }
+    photos(document.body);
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', apply, { once: true });
   else apply();
+  // Pictures that arrive after the page is built get their turn here.
+  window.addEventListener('load', apply, { once: true });
 })();
 "#;
 
 /// Take the dark stylesheet off a page again.
-pub const UNDARK: &str = "{ const s = document.getElementById('__gaze_dark'); if (s) s.remove(); }";
+pub const UNDARK: &str = "{ const s = document.getElementById('__gaze_dark'); if (s) s.remove(); document.querySelectorAll('[data-gaze-photo],[data-gaze-backdrop]').forEach(e => { e.removeAttribute('data-gaze-photo'); e.removeAttribute('data-gaze-backdrop'); }); }";
