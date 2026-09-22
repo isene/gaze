@@ -122,10 +122,18 @@ pub fn load() -> Config {
 pub struct DarkSites {
     pub sites: std::collections::BTreeMap<String, bool>,
     path: PathBuf,
+    /// The line written at the top of the file, saying what it holds.
+    note: &'static str,
 }
 
 impl DarkSites {
     pub fn load(path: PathBuf) -> DarkSites {
+        DarkSites::load_noted(path, "Sites where dark pages differ from the default in config.yml.")
+    }
+
+    /// The same list, under another name and another heading. The
+    /// microphone list is one of these.
+    pub fn load_noted(path: PathBuf, note: &'static str) -> DarkSites {
         let mut sites = std::collections::BTreeMap::new();
         if let Ok(text) = std::fs::read_to_string(&path) {
             for line in text.lines() {
@@ -137,7 +145,7 @@ impl DarkSites {
                 }
             }
         }
-        DarkSites { sites, path }
+        DarkSites { sites, path, note }
     }
 
     pub fn get(&self, site: &str) -> Option<bool> { self.sites.get(site).copied() }
@@ -148,7 +156,7 @@ impl DarkSites {
 
     pub fn set(&mut self, site: &str, on: bool) {
         self.sites.insert(site.to_string(), on);
-        let mut out = String::from("# Sites where dark pages differ from the default in config.yml.\n");
+        let mut out = format!("# {}\n", self.note);
         for (site, on) in &self.sites {
             out.push_str(site);
             out.push_str(if *on { " on\n" } else { " off\n" });

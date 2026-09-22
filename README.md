@@ -68,6 +68,16 @@ Logins live in `~/.gaze/passwords`, one file sealed with ChaCha20-Poly1305 under
 
 On by default; `adblock: false` in the config turns it off. The first start fetches [Steven Black's hosts list](https://github.com/StevenBlack/hosts) to `~/.gaze/adblock/hosts` and compiles it into a WebKit content filter, which takes a few seconds once. Every domain on the list is then blocked for every request. `:adblock-update` fetches the list again.
 
+## The microphone and the camera
+
+A call page needs both, and no page gets them without being asked for.
+
+`:mic` lets the site you are on use the microphone and the camera, and remembers it. Typing it again takes them back. The list is `~/.gaze/mic`, one site per line.
+
+A site that asks and is not on the list is refused, and the status line says which site asked. The page is reloaded when you answer, since a page only asks once.
+
+A page also has to be the tab you are looking at. A call in a background tab waits for you to come back to it, which is the browser's own rule, not gaze's.
+
 ## Dark pages
 
 On by default; `dark: false` in the config turns it off.

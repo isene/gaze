@@ -79,6 +79,8 @@ struct App {
     keymap: keys::Keymap,
     marks: bookmarks::Bookmarks,
     dark_sites: config::DarkSites,
+    /// Sites allowed the microphone and the camera.
+    mic_sites: config::DarkSites,
     hist: history::History,
     /// What the command line offers right now, and which one Tab picked.
     offers: Vec<Offer>,
@@ -248,6 +250,12 @@ fn build(app: &gtk::Application) -> Shared {
     settings.set_enable_developer_extras(true);
     settings.set_enable_smooth_scrolling(false);
     settings.set_javascript_can_open_windows_automatically(false);
+    // Without these three the microphone and the camera do not exist at
+    // all, and a call page waits for a stream that never comes. A page
+    // still has to be let in by hand; see the mic command.
+    settings.set_enable_media_stream(true);
+    settings.set_enable_webrtc(true);
+    settings.set_enable_media_capabilities(true);
 
     if let Some(ctx) = WebContext::default() {
         ctx.register_uri_scheme("gaze", serve_internal);
@@ -304,13 +312,14 @@ fn build(app: &gtk::Application) -> Shared {
     let keymap = keys::Keymap::load(dir.join("keys.yml"));
     let marks = bookmarks::Bookmarks::load(dir.join("bookmarks"));
     let dark_sites = config::DarkSites::load(dir.join("dark"));
+    let mic_sites = config::DarkSites::load_noted(dir.join("mic"), "Sites allowed to use the microphone and the camera.");
     let shared: Shared = Rc::new(RefCell::new(App {
         ui: Ui { window: window.clone(), tabbar, stack, bottom, status, right, entry: entry.clone(), completion },
         cfg, tabs, views: HashMap::new(), session, settings,
         mode: Mode::Normal, keys: String::new(), ask: Ask::Command, prompt: None,
         message: String::new(), hover: String::new(), store, fill_at: HashMap::new(),
         closed: Vec::new(), find: String::new(), session_path, save_pending: false,
-        keymap, marks, dark_sites, hist, offers: Vec::new(), selected: None, setting_text: false, filter: None,
+        keymap, marks, dark_sites, mic_sites, hist, offers: Vec::new(), selected: None, setting_text: false, filter: None,
     }));
 
     let keys = gtk::EventControllerKey::new();
@@ -394,6 +403,29 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
     view.set_vexpand(true);
     view.set_hexpand(true);
     view.set_zoom_level(zoom);
+
+    // A page asking for the microphone or the camera. Answering is not
+    // optional: an unanswered request leaves the page waiting for ever,
+    // which is what a call page looks like when it seems to hang.
+    {
+        let s = shared.clone();
+        view.connect_permission_request(move |v, req| {
+            let Some(_) = req.downcast_ref::<webkit6::UserMediaPermissionRequest>() else {
+                return false;
+            };
+            let site = site_key(&v.uri().map(|u| u.to_string()).unwrap_or_default());
+            // The borrow ends here on purpose: set_message below takes
+            // the same cell, and a borrow held across it panics.
+            let allowed = s.borrow().mic_sites.get(&site).unwrap_or(false);
+            if allowed {
+                req.allow();
+            } else {
+                req.deny();
+                set_message(&s, &format!("{site} wants the microphone or camera; :mic lets it in"));
+            }
+            true
+        });
+    }
 
     {
         let s = shared.clone();
@@ -657,6 +689,23 @@ fn prefer_dark(on: bool) {
 
 /// Dark pages on or off for the site you are on, kept for next time.
 /// Other tabs are left as they are; only their next page reads the
+/// Let this site have the microphone and the camera, or take them back.
+/// The page is reloaded either way, since a page only asks once.
+fn toggle_mic(shared: &Shared) {
+    let (site, on) = {
+        let a = shared.borrow();
+        let uri = a.tabs.current().map(|t| t.uri.clone()).unwrap_or_default();
+        let site = site_key(&uri);
+        let on = !a.mic_sites.get(&site).unwrap_or(false);
+        (site, on)
+    };
+    shared.borrow_mut().mic_sites.set(&site, on);
+    set_message(shared, &format!("{site} {} the microphone and camera", if on { "may use" } else { "may not use" }));
+    if let Some(v) = current_view(&shared.borrow()) {
+        v.reload();
+    }
+}
+
 /// changed list.
 fn toggle_dark(shared: &Shared) {
     let (site, on) = {
@@ -1377,6 +1426,7 @@ fn run_command(shared: &Shared, line: &str) {
         "paste-tab" => paste_and_open(shared, true),
         "fullscreen" => { let a = shared.borrow(); let on = a.ui.tabbar.is_visible(); a.ui.tabbar.set_visible(!on); a.ui.bottom.set_visible(!on); }
         "dark" => toggle_dark(shared),
+        "mic" => toggle_mic(shared),
         "dark-default" => {
             let on = { let mut a = shared.borrow_mut(); a.cfg.dark = !a.cfg.dark; a.cfg.dark };
             prefer_dark(on);
@@ -1902,6 +1952,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Copy, zoom, view", "zoom-in", ""), ("Copy, zoom, view", "zoom-out", ""), ("Copy, zoom, view", "zoom-reset", ""), ("Copy, zoom, view", "zoom <percent>", ""),
     ("Copy, zoom, view", "fullscreen", "hide the tab bar and the status line; again to bring them back"),
     ("Copy, zoom, view", "dark", "dark pages on or off for this site, kept for next time"),
+    ("Copy, zoom, view", "mic", "let this site use the microphone and camera, kept for next time"),
     ("Copy, zoom, view", "dark-default", "the same for every site you have not set"),
     ("Tabs", "tab-next", "the next visible tab"), ("Tabs", "tab-prev", "the previous one"),
     ("Tabs", "tab <n>", "the n-th visible tab"), ("Tabs", "tab-first", ""), ("Tabs", "tab-last", ""),
