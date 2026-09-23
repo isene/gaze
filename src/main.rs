@@ -1816,7 +1816,7 @@ fn adblock_store() -> UserContentFilterStore {
 fn adblock_start(shared: &Shared) {
     if !shared.borrow().cfg.adblock { return; }
     let s = shared.clone();
-    adblock_store().load("ads", None::<&gio::Cancellable>, move |r| match r {
+    adblock_store().load(adblock::FILTER, None::<&gio::Cancellable>, move |r| match r {
         Ok(filter) => apply_filter(&s, filter, None),
         Err(_) => {
             if adblock_dir().join("hosts").exists() { adblock_compile(&s); } else { adblock_download(&s); }
@@ -1857,7 +1857,7 @@ fn adblock_compile(shared: &Shared) {
     set_message(shared, &format!("Ad blocker: compiling {} domains…", n));
     let bytes = glib::Bytes::from_owned(json.into_bytes());
     let s = shared.clone();
-    adblock_store().save("ads", &bytes, None::<&gio::Cancellable>, move |r| match r {
+    adblock_store().save(adblock::FILTER, &bytes, None::<&gio::Cancellable>, move |r| match r {
         Ok(filter) => apply_filter(&s, filter, Some(n)),
         Err(e) => set_message(&s, &format!("Ad blocker: {}", e)),
     });

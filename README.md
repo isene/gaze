@@ -78,6 +78,12 @@ A site that asks and is not on the list is refused, and the status line says whi
 
 A page also has to be the tab you are looking at. A call in a background tab waits for you to come back to it, which is the browser's own rule, not gaze's.
 
+## The ad blocker and the page you asked for
+
+Everything a page pulls in is blocked against the hosts list: images, scripts, styles, fonts, media, requests.
+
+The page you asked for never is. A hosts list holds click trackers, and a password reset arrives through one. Discord sends you to `click.discord.com`, which is on the list. Blocking it leaves you looking at nothing, with no idea why.
+
 ## Which chip draws the page
 
 The one built into the processor, by default. `GAZE_CPU=1` hands it back to the processor itself, for a machine whose graphics are the weaker of the two.
