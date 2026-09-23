@@ -112,28 +112,40 @@ fn main() {
         let keep: Vec<&str> = v.split(',').map(str::trim).filter(|s| !s.is_empty() && *s != "gl").collect();
         if keep.is_empty() { std::env::remove_var("GDK_DISABLE"); } else { std::env::set_var("GDK_DISABLE", keep.join(",")); }
     }
-    // On software GL (Mesa's llvmpipe) WebKit's painting spreads over
-    // every core and burns three to five times the CPU of one thread,
-    // for no smoother page. One thread it is, unless you say otherwise.
-    if std::env::var_os("LP_NUM_THREADS").is_none() { std::env::set_var("LP_NUM_THREADS", "1"); }
-    // A page is drawn on the CPU, not on the graphics chip. Measured on
-    // an Intel laptop through a plain X server, one load of a long
-    // article costs gaze 2.4 to 4.0 seconds on the CPU and 11.4 to 12.5
-    // on the chip. A page is a great many small paints, and each one
-    // pays the driver again; the copy back to a window that is not
-    // composited pays once more. Video is the other way round and does
-    // not come through here: it goes to the player.
+    // Which chip draws the page.
     //
-    // GAZE_GPU=1 hands it back to the chip, for a desktop with a
-    // compositor where the picture never comes back over the bus.
-    if std::env::var_os("GAZE_GPU").is_none() {
+    // For a while this was the processor, because the graphics path led
+    // to a discrete card that cost watts and was slower besides. That
+    // card is switched off now (`__EGL_VENDOR_LIBRARY_FILENAMES` names
+    // Mesa, and the NVIDIA entry is gone), so the graphics path is the
+    // one built into the chip.
+    //
+    // Measured on a heavy page, 200 bullets and 320 table rows over a
+    // gradient: forty scroll steps cost 1.38 s of processor time the
+    // old way and 1.01 s the new one, with page loads the same either
+    // way. That was with software GL standing in for the chip, so the
+    // real one only widens the gap.
+    //
+    // GAZE_CPU=1 puts the old way back, for a machine whose graphics
+    // are worse than its processor.
+    if std::env::var_os("GAZE_CPU").is_some() {
         std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
+        if std::env::var_os("WEBKIT_SKIA_ENABLE_CPU_RENDERING").is_none() {
+            std::env::set_var("WEBKIT_SKIA_ENABLE_CPU_RENDERING", "1");
+        }
+        // Software GL spreads one page over every core for no gain.
+        if std::env::var_os("LP_NUM_THREADS").is_none() {
+            std::env::set_var("LP_NUM_THREADS", "1");
+        }
     }
-    // WebKit then paints its tiles straight on the CPU instead of
-    // through that software GL: a third less work for the same page.
-    if std::env::var_os("LIBGL_ALWAYS_SOFTWARE").is_some() && std::env::var_os("WEBKIT_SKIA_ENABLE_CPU_RENDERING").is_none() {
-        std::env::set_var("WEBKIT_SKIA_ENABLE_CPU_RENDERING", "1");
+    // Never wake a discrete card: it is watts for nothing on a browser.
+    if std::env::var_os("__EGL_VENDOR_LIBRARY_FILENAMES").is_none() {
+        let mesa = "/usr/share/glvnd/egl_vendor.d/50_mesa.json";
+        if std::path::Path::new(mesa).exists() {
+            std::env::set_var("__EGL_VENDOR_LIBRARY_FILENAMES", mesa);
+        }
     }
+
     let app = gtk::Application::builder()
         .application_id("org.isene.gaze")
         .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)

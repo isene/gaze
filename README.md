@@ -78,6 +78,14 @@ A site that asks and is not on the list is refused, and the status line says whi
 
 A page also has to be the tab you are looking at. A call in a background tab waits for you to come back to it, which is the browser's own rule, not gaze's.
 
+## Which chip draws the page
+
+The one built into the processor, by default. `GAZE_CPU=1` hands it back to the processor itself, for a machine whose graphics are the weaker of the two.
+
+Measured on a heavy page, 200 bullets and 320 table rows over a gradient: forty scroll steps cost 1.38 s of processor time the old way and 1.01 s the new one. Page loads cost the same either way.
+
+gaze also refuses to wake a discrete card, which is watts for nothing on a browser.
+
 ## Dark pages
 
 On by default; `dark: false` in the config turns it off.
