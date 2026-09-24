@@ -508,6 +508,17 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
             refresh(&s);
         });
     }
+    // A page that fails to load leaves one line in ~/.gaze/errors.log:
+    // the time, the address and what went wrong. It runs only on failure.
+    view.connect_load_failed(|_, _, uri, err| {
+        use std::io::Write;
+        let path = config::expand("~/.gaze/errors.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let _ = writeln!(f, "{now}\t{uri}\t{} ({:?} {})", err, err.domain(), err.code());
+        }
+        false
+    });
     {
         let s = shared.clone();
         view.connect_decide_policy(move |_, decision, kind| {
