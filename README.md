@@ -112,6 +112,10 @@ A video page goes to `mpv` instead of the browser: a click on a YouTube link, a 
 
 `video_player` in the config names the program, empty keeps videos in gaze, and `video_urls` lists how a video page's address starts.
 
+## Spare web processes
+
+WebKitGTK 2.52 starts a spare web process after each page from a new site, then neither uses nor ends it. Each is 58 MB and wakes once a second; a day of browsing left 37 of them. gaze ends its own web processes that are still under 80 MB after a minute, when a page finishes loading or a tab closes. A process that has shown a page is 150 MB or more, so no page is touched.
+
 ## Graphics
 
 gaze draws pages on the processor, not on the graphics chip, and sets that for itself at startup.

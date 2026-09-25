@@ -463,6 +463,7 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
                     refresh(&s);
                     schedule_save(&s);
                     maybe_fill(&s, id);
+                    end_spare_web_processes();
                 }
                 _ => refresh(&s),
             }
@@ -986,6 +987,69 @@ fn close_tab(shared: &Shared, idx: usize) {
     }
     show_active(shared);
     save_session(shared);
+    end_spare_web_processes();
+}
+
+/// WebKitGTK 2.52 starts a spare web process after each page from a new
+/// site and then neither uses nor ends it: 58 MB and a wake-up a second
+/// each, 37 of them after a day of browsing. WebKit's own MiniBrowser does
+/// the same, and none of its settings stop it. A process that has shown a
+/// page is 150 MB or more, so gaze ends its own web processes that are
+/// still under 80 MB after a minute; the minute spares a new page's
+/// process, which starts small. Ending one makes WebKit start no other,
+/// and pages and the back button carry on.
+///
+/// Runs when a page finishes loading and when a tab closes, never on a
+/// timer: a walk of gaze's own children in /proc.
+fn end_spare_web_processes() {
+    const SPARE_KB: u64 = 80 * 1024;
+    const MIN_AGE_S: f64 = 60.0;
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
+    let Some(up) = std::fs::read_to_string("/proc/uptime").ok()
+        .and_then(|s| s.split_whitespace().next()?.parse::<f64>().ok()) else { return };
+    let mut ended = 0;
+    for pid in web_processes() {
+        let rss = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()
+            .and_then(|s| s.lines().find_map(|l| l.strip_prefix("VmRSS:"))
+                .and_then(|v| v.split_whitespace().next()?.parse::<u64>().ok()));
+        // Field 22, the start in clock ticks after boot; counted after the
+        // ")" that ends the name, since a name may hold spaces.
+        let started = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()
+            .and_then(|s| s.rsplit_once(')')?.1.split_whitespace().nth(19)?.parse::<f64>().ok());
+        let (Some(rss), Some(started)) = (rss, started) else { continue };
+        if rss < SPARE_KB && up - started / hz >= MIN_AGE_S {
+            unsafe { libc::kill(pid, libc::SIGTERM); }
+            ended += 1;
+        }
+    }
+    if ended > 0 { eprintln!("gaze: ended {ended} spare web process(es)"); }
+}
+
+/// This gaze's web processes: its children, or found through the bwrap
+/// sandboxes WebKit starts them in.
+fn web_processes() -> Vec<i32> {
+    fn children(pid: i32) -> Vec<i32> {
+        let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else { return Vec::new() };
+        tasks.flatten()
+            .filter_map(|t| std::fs::read_to_string(t.path().join("children")).ok())
+            .flat_map(|s| s.split_whitespace().filter_map(|p| p.parse().ok()).collect::<Vec<i32>>())
+            .collect()
+    }
+    fn comm(pid: i32) -> String {
+        std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default().trim().to_string()
+    }
+    let mut out = Vec::new();
+    let mut look = vec![(std::process::id() as i32, 0)];
+    while let Some((pid, depth)) = look.pop() {
+        for c in children(pid) {
+            match comm(c).as_str() {
+                "WebKitWebProces" => out.push(c),
+                "bwrap" if depth < 3 => look.push((c, depth + 1)),
+                _ => {}
+            }
+        }
+    }
+    out
 }
 
 fn undo_close(shared: &Shared) {
