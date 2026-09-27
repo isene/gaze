@@ -31,6 +31,7 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 | `M`, `gb` / `gB` | Bookmark this page; the bookmark list here / in a new tab |
 | `gp` | Fill the login form; again for the next saved login of the site |
 | `v` | Play this page's video in `mpv` (see Video) |
+| `Ctrl-a` | A Claude session about the page, in a new terminal window (`claude` on the PATH; the terminal is `terminal` in the config, `glass --` unless you change it). In insert mode `Ctrl-a` still selects the field's text |
 | `:` | Command line |
 | `Q`, `ZZ` | Quit |
 

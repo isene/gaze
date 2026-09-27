@@ -831,6 +831,59 @@ fn toggle_dark(shared: &Shared) {
     set_message(shared, &format!("Dark pages {} for {}", if on { "on" } else { "off" }, site));
 }
 
+/// Ctrl-a, as in the rest of the Fe2O3 suite: a Claude session about the
+/// page, in a terminal window of its own.
+fn claude(shared: &Shared) {
+    let Some(view) = current_view(&shared.borrow()) else { return };
+    let (uri, title, terminal) = {
+        let a = shared.borrow();
+        let t = a.tabs.current();
+        (t.map(|t| t.uri.clone()).unwrap_or_default(), t.map(|t| t.title.clone()).unwrap_or_default(), a.cfg.terminal.clone())
+    };
+    let shared = shared.clone();
+    run_js_then(&view, "document.body ? document.body.innerText : ''", move |v| {
+        let text = v.map(|v| v.to_str().to_string()).unwrap_or_default();
+        let said = start_claude(&terminal, &format!("{title}\n{uri}\n\n{text}\n"));
+        set_message(&shared, &said);
+    });
+}
+
+/// Open `claude` in a new terminal window on `page`. The page goes to a
+/// file only you can read, named in the opening prompt, and the file goes
+/// when the window closes.
+fn start_claude(terminal: &str, page: &str) -> String {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    // glass runs a command only by its full path.
+    let Some(claude) = std::env::var_os("PATH")
+        .and_then(|p| std::env::split_paths(&p).map(|d| d.join("claude")).find(|f| f.is_file()))
+    else { return "claude is not on the PATH".into() };
+    let mut words = terminal.split_whitespace();
+    let Some(term) = words.next() else { return "Name a terminal in config.yml to open Claude in".into() };
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let file = std::env::temp_dir().join(format!("gaze-claude-{}-{nanos}.txt", std::process::id()));
+    let wrote = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&file)
+        .and_then(|mut f| f.write_all(page.as_bytes()));
+    if let Err(e) = wrote { return format!("Could not write the page for Claude: {e}"); }
+    let prompt = format!(
+        "I am in gaze, my web browser. The page on my screen is in {}: read it first. \
+         Answer briefly, and ask what I want to know if I have not said.",
+        file.display()
+    );
+    let null = std::process::Stdio::null;
+    match std::process::Command::new(term).args(words).arg(&claude).arg(&prompt)
+        .stdin(null()).stdout(null()).stderr(null()).spawn() {
+        Ok(child) => {
+            glib::child_watch_add(glib::Pid(child.id() as i32), move |_, _| { let _ = std::fs::remove_file(&file); });
+            "Claude opens in a new window".into()
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&file);
+            format!("{term}: {e}")
+        }
+    }
+}
+
 fn run_js(view: &WebView, code: &str) {
     view.evaluate_javascript(code, None, None, None::<&gio::Cancellable>, |_| {});
 }
@@ -1725,6 +1778,7 @@ fn run_command(shared: &Shared, line: &str) {
             }
         }
         "help" => { open_tab(shared, "gaze://help", false); }
+        "claude" => claude(shared),
         "inspect" | "devtools" => with_view(shared, |v| { if let Some(i) = v.inspector() { i.show(); } }),
         "session-save" => { save_session(shared); set_message(shared, "Session saved"); }
         "quit" | "qa" | "wq" => quit(shared),
@@ -2144,6 +2198,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Passwords", "password-master", "choose a new master password"),
     ("Other", "bind <keys> <command>", "bind keys; kept in ~/.gaze/keys.yml"), ("Other", "unbind <keys>", ""),
     ("Other", "adblock-update", "fetch the hosts list again and rebuild the ad blocker"),
+    ("Other", "claude", "a Claude session about this page, in a new terminal window"),
     ("Other", "help", "this page"), ("Other", "inspect", "the web inspector"), ("Other", "session-save", ""), ("Other", "quit", ""),
 ];
 

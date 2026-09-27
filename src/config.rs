@@ -30,6 +30,9 @@ pub struct Config {
     pub video_player: String,
     /// Beginnings of the URLs that go to the player.
     pub video_urls: Vec<String>,
+    /// The terminal Ctrl-a opens Claude in, with whatever comes before
+    /// the command: `glass --`, `xterm -e`, `alacritty -e`.
+    pub terminal: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -55,6 +58,7 @@ impl Default for Config {
             video_player: "mpv".into(),
             video_urls: ["https://www.youtube.com/watch", "https://m.youtube.com/watch", "https://youtu.be/", "https://www.youtube.com/shorts/", "https://vimeo.com/"]
                 .iter().map(|s| s.to_string()).collect(),
+            terminal: "glass --".into(),
         }
     }
 }
@@ -81,6 +85,9 @@ video_urls:
   - https://youtu.be/
   - https://www.youtube.com/shorts/
   - https://vimeo.com/
+# The terminal Ctrl-a opens Claude in, with what comes before the command
+# (glass --, xterm -e, alacritty -e):
+terminal: glass --
 # Tab groups that always exist, with a colour name or #rrggbb:
 # groups:
 #   - {name: Work, color: '#5faf87'}

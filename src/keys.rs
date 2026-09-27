@@ -38,6 +38,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("zM", "groups-fold"), ("zR", "groups-unfold"),
     ("gp", "fill"), ("v", "play"),
     ("M", "bookmark-add"), ("gb", "open gaze://bookmarks"), ("gB", "tabopen gaze://bookmarks"),
+    ("<Ctrl-a>", "claude"),
     ("?", "help"), ("Q", "quit"), ("ZZ", "quit"), ("<Ctrl-q>", "quit"),
 ];
 
