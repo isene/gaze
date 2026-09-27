@@ -1,5 +1,8 @@
-//! Bookmarks: one per line in `~/.gaze/bookmarks`, the URL, a tab, the
+//! Bookmarks: one per line in `~/.gaze/sync/bookmarks`, the URL, a tab, the
 //! title. A plain text file you can edit by hand.
+//!
+//! The phone's gaze shares the file through Syncthing, so the list is
+//! read again whenever the file changed on disk.
 
 use std::path::PathBuf;
 
@@ -12,18 +15,34 @@ pub struct Bookmark {
 pub struct Bookmarks {
     list: Vec<Bookmark>,
     path: PathBuf,
+    seen: Option<std::time::SystemTime>,
 }
 
 impl Bookmarks {
     pub fn load(path: PathBuf) -> Bookmarks {
-        let list = std::fs::read_to_string(&path).unwrap_or_default().lines()
+        let mut b = Bookmarks { list: Vec::new(), path, seen: None };
+        b.read();
+        b
+    }
+
+    fn modified(&self) -> Option<std::time::SystemTime> {
+        std::fs::metadata(&self.path).and_then(|m| m.modified()).ok()
+    }
+
+    fn read(&mut self) {
+        self.seen = self.modified();
+        self.list = std::fs::read_to_string(&self.path).unwrap_or_default().lines()
             .filter_map(|l| {
                 let (url, title) = l.split_once('\t').unwrap_or((l, ""));
                 let url = url.trim();
                 if url.is_empty() { None } else { Some(Bookmark { url: url.to_string(), title: title.trim().to_string() }) }
             })
             .collect();
-        Bookmarks { list, path }
+    }
+
+    /// Read the file again when it changed on disk (the phone added one).
+    pub fn refresh(&mut self) {
+        if self.modified() != self.seen { self.read(); }
     }
 
     pub fn list(&self) -> &[Bookmark] { &self.list }
@@ -31,6 +50,7 @@ impl Bookmarks {
 
     /// Add a bookmark, or give a known URL its new title. True when new.
     pub fn add(&mut self, url: &str, title: &str) -> Result<bool, String> {
+        self.refresh();
         let url = url.trim();
         if url.is_empty() { return Err("nothing to bookmark".into()); }
         let title = title.trim();
@@ -43,6 +63,7 @@ impl Bookmarks {
     }
 
     pub fn remove(&mut self, url: &str) -> Result<bool, String> {
+        self.refresh();
         let before = self.list.len();
         self.list.retain(|b| b.url != url.trim());
         if self.list.len() == before { return Ok(false); }
@@ -54,6 +75,7 @@ impl Bookmarks {
     /// Import and Backup → Export Bookmarks to HTML. Returns how many
     /// were new.
     pub fn import_html(&mut self, html: &str) -> Result<usize, String> {
+        self.refresh();
         let mut added = 0;
         for (url, title) in anchors(html) {
             if url.starts_with("place:") || url.starts_with("javascript:") { continue; }
@@ -66,12 +88,14 @@ impl Bookmarks {
         Ok(added)
     }
 
-    fn save(&self) -> Result<(), String> {
+    fn save(&mut self) -> Result<(), String> {
         if let Some(dir) = self.path.parent() { std::fs::create_dir_all(dir).map_err(|e| e.to_string())?; }
         let text: String = self.list.iter().map(|b| format!("{}\t{}\n", b.url, b.title)).collect();
         let tmp = self.path.with_extension("tmp");
         std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, &self.path).map_err(|e| e.to_string())
+        std::fs::rename(&tmp, &self.path).map_err(|e| e.to_string())?;
+        self.seen = self.modified();
+        Ok(())
     }
 }
 
@@ -127,6 +151,18 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gaze-bm-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         Bookmarks::load(dir.join("bookmarks"))
+    }
+
+    #[test]
+    fn a_bookmark_added_on_the_phone_survives_one_added_here() {
+        let mut b = fresh("sync");
+        b.add("https://a.no/", "A").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&b.path, "https://a.no/\tA\nhttps://phone.no/\tP\n").unwrap();
+        b.add("https://c.no/", "C").unwrap();
+        let urls: Vec<&str> = b.list().iter().map(|x| x.url.as_str()).collect();
+        assert_eq!(urls, ["https://a.no/", "https://phone.no/", "https://c.no/"]);
+        let _ = std::fs::remove_dir_all(b.path.parent().unwrap());
     }
 
     #[test]

@@ -50,7 +50,7 @@ groups:
 
 ## Passwords
 
-Logins live in `~/.gaze/passwords`, one file sealed with ChaCha20-Poly1305 under a key that Argon2id makes from a master password. You choose the master password the first time gaze needs the file. It is asked once per session; `:password-lock` locks again.
+Logins live in `~/.gaze/sync/passwords`, one file sealed with ChaCha20-Poly1305 under a key that Argon2id makes from a master password. You choose the master password the first time gaze needs the file. It is asked once per session; `:password-lock` locks again.
 
 - A login page gets filled when it loads, with the login you used last on that site. `gp` cycles through the others.
 - After you log in with a new or changed password, gaze asks whether to save it: `y` or `n`.
@@ -58,11 +58,19 @@ Logins live in `~/.gaze/passwords`, one file sealed with ChaCha20-Poly1305 under
 - `:passwords` lists the sites and usernames. Passwords themselves are never shown.
 - `:password-import ~/logins.csv` reads the file Firefox writes from `about:logins` → Export Logins. gaze deletes the CSV after a successful import.
 
+## The phone
+
+gaze has a phone half in [nomad](https://github.com/isene/nomad/tree/master/apps/gaze). The two share `~/.gaze/sync/` through Syncthing: the passwords, the bookmarks and the tabs sent across. The first start of gaze 0.3.28 moves the passwords and the bookmarks in there from `~/.gaze/`.
+
+`:send` opens the page you are on in gaze on the phone. A page the phone sends opens here as a background tab, and the status line says so.
+
+Both sides read a changed file again before they write it. A login saved on the phone survives one saved here a minute later.
+
 ## History and bookmarks
 
 `o` on its own lists the pages you were at last. Typing narrows the list to pages whose URL or title holds every word you typed, bookmarks (★) first. `Tab` and `Shift-Tab` put one on the line and `Return` opens it. Visits are kept in `~/.gaze/history`, the last five thousand pages.
 
-`M` bookmarks the page; `gb` shows the list, where `f` and the letters open one. `:bookmark-del` forgets the current page. `:bookmark-import ~/bookmarks.html` reads the file Firefox writes from Manage Bookmarks → Import and Backup → Export Bookmarks to HTML. The list is `~/.gaze/bookmarks`, one URL, a tab and a title per line.
+`M` bookmarks the page; `gb` shows the list, where `f` and the letters open one. `:bookmark-del` forgets the current page. `:bookmark-import ~/bookmarks.html` reads the file Firefox writes from Manage Bookmarks → Import and Backup → Export Bookmarks to HTML. The list is `~/.gaze/sync/bookmarks`, one URL, a tab and a title per line.
 
 ## Ad blocking
 
@@ -137,11 +145,10 @@ Runtime: WebKitGTK 6.0 and GTK 4. gaze drops `gl` from `GDK_DISABLE` for itself:
 
 - `~/.gaze/config.yml`: home page, search engine (`%s` is the query), download folder, zoom, scroll step, ad blocking, dark pages, text size of the bars (`font_size`, in pixels), standing groups.
 - `~/.gaze/keys.yml`: the key bindings you changed.
-- `~/.gaze/bookmarks`: the bookmarks, one per line.
+- `~/.gaze/sync/`: shared with the phone through Syncthing. `passwords` (the sealed logins), `bookmarks` (one per line), and `tabs/` (the tabs sent across, one file each).
 - `~/.gaze/dark`: the sites where dark pages differ from the default, one `<site> on` or `<site> off` per line.
 - `~/.gaze/history`: one line per visit, folded to one entry per page when read.
 - `~/.gaze/session.json`: the open tabs and groups, written when they change and read at start. Only the current tab loads at start; the others load when you go to them.
-- `~/.gaze/passwords`: the sealed logins.
 - `~/.gaze/adblock`: the hosts list and the compiled filter.
 - `~/.gaze/data`, `~/.gaze/cache`: cookies, local storage and the cache, kept by WebKit.
   Cookies are accepted from any site, third parties too: Google's sign-in hands you to YouTube through one, and refusing it ends on YouTube's "oops" page.

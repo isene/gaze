@@ -1,8 +1,11 @@
-//! Saved logins, kept in one encrypted file: `~/.gaze/passwords`.
+//! Saved logins, kept in one encrypted file: `~/.gaze/sync/passwords`.
 //!
 //! The file is the JSON list of logins, sealed with ChaCha20-Poly1305
 //! under a key that Argon2id derives from the master password. The key
 //! lives in memory only while the store is unlocked.
+//!
+//! The phone's gaze shares the file through Syncthing, so a change reads
+//! the file again first when it changed on disk, and lands on top of it.
 
 use argon2::Argon2;
 use chacha20poly1305::aead::rand_core::RngCore;
@@ -33,11 +36,13 @@ pub struct Store {
     key: Option<[u8; 32]>,
     salt: [u8; SALT_LEN],
     logins: Vec<Login>,
+    /// When the file was last read or written by this store.
+    seen: Option<std::time::SystemTime>,
 }
 
 impl Store {
     pub fn new(path: PathBuf) -> Store {
-        Store { path, key: None, salt: [0; SALT_LEN], logins: Vec::new() }
+        Store { path, key: None, salt: [0; SALT_LEN], logins: Vec::new(), seen: None }
     }
 
     pub fn exists(&self) -> bool { self.path.exists() }
@@ -69,7 +74,41 @@ impl Store {
         self.logins = serde_json::from_slice(&plain).map_err(|e| e.to_string())?;
         self.salt = salt;
         self.key = Some(key);
+        self.seen = self.modified();
         Ok(self.logins.len())
+    }
+
+    fn modified(&self) -> Option<std::time::SystemTime> {
+        std::fs::metadata(&self.path).and_then(|m| m.modified()).ok()
+    }
+
+    /// Read the file again when it changed on disk since this store last
+    /// saw it (the phone saved a login). A file sealed under another
+    /// master password locks the store, so the next use asks again.
+    pub fn refresh(&mut self) {
+        let Some(key) = self.key else { return };
+        let now = self.modified();
+        if now.is_none() || now == self.seen { return; }
+        let opened = std::fs::read(&self.path).ok().and_then(|raw| {
+            if raw.len() < MAGIC.len() + SALT_LEN + NONCE_LEN || &raw[..MAGIC.len()] != MAGIC { return None; }
+            if raw[MAGIC.len()..MAGIC.len() + SALT_LEN] != self.salt { return None; }
+            let nonce = &raw[MAGIC.len() + SALT_LEN..MAGIC.len() + SALT_LEN + NONCE_LEN];
+            let plain = ChaCha20Poly1305::new(Key::from_slice(&key))
+                .decrypt(Nonce::from_slice(nonce), &raw[MAGIC.len() + SALT_LEN + NONCE_LEN..]).ok()?;
+            serde_json::from_slice::<Vec<Login>>(&plain).ok()
+        });
+        match opened {
+            Some(logins) => { self.logins = logins; self.seen = now; }
+            None => self.lock(),
+        }
+    }
+
+    /// Ready to change: unlocked, and holding what the file holds now.
+    fn fresh(&mut self) -> Result<(), String> {
+        if self.key.is_none() { return Err("passwords are locked".into()); }
+        self.refresh();
+        if self.key.is_none() { return Err("the password file changed on another machine; unlock again".into()); }
+        Ok(())
     }
 
     /// Seal the store under a new master password, with a fresh salt.
@@ -105,7 +144,7 @@ impl Store {
     /// Keep a login the page just sent. A known username on the site gets
     /// its password replaced; the same password again changes nothing.
     pub fn remember(&mut self, login: Login) -> Result<Change, String> {
-        if self.key.is_none() { return Err("passwords are locked".into()); }
+        self.fresh()?;
         let site = site_key(&login.origin);
         let change = match self.logins.iter_mut()
             .find(|l| site_key(&l.origin) == site && l.username == login.username)
@@ -120,6 +159,7 @@ impl Store {
 
     /// Note that a login was filled, so it comes first next time.
     pub fn touch(&mut self, origin: &str, username: &str) {
+        if self.fresh().is_err() { return; }
         let site = site_key(origin);
         if let Some(l) = self.logins.iter_mut().find(|l| site_key(&l.origin) == site && l.username == username) {
             l.used = now();
@@ -128,6 +168,7 @@ impl Store {
     }
 
     pub fn remove(&mut self, uri: &str, username: &str) -> Result<bool, String> {
+        self.fresh()?;
         let site = site_key(uri);
         let before = self.logins.len();
         self.logins.retain(|l| !(site_key(&l.origin) == site && l.username == username));
@@ -139,7 +180,7 @@ impl Store {
     /// Import the CSV Firefox writes from about:logins → Export. Returns
     /// (added, updated).
     pub fn import_csv(&mut self, text: &str) -> Result<(usize, usize), String> {
-        if self.key.is_none() { return Err("passwords are locked".into()); }
+        self.fresh()?;
         let rows = parse_csv(text);
         let Some(header) = rows.first() else { return Err("empty file".into()) };
         let col = |name: &str| header.iter().position(|h| h.trim().eq_ignore_ascii_case(name));
@@ -165,7 +206,7 @@ impl Store {
         Ok((added, updated))
     }
 
-    fn save(&self) -> Result<(), String> {
+    fn save(&mut self) -> Result<(), String> {
         let Some(key) = self.key else { return Err("passwords are locked".into()) };
         let mut nonce = [0u8; NONCE_LEN];
         OsRng.fill_bytes(&mut nonce);
@@ -187,7 +228,9 @@ impl Store {
                 .open(&tmp).map_err(|e| e.to_string())?;
             f.write_all(&out).map_err(|e| e.to_string())?;
         }
-        std::fs::rename(&tmp, &self.path).map_err(|e| e.to_string())
+        std::fs::rename(&tmp, &self.path).map_err(|e| e.to_string())?;
+        self.seen = self.modified();
+        Ok(())
     }
 }
 
@@ -308,6 +351,24 @@ mod tests {
         assert!(s.unlock("old").is_err());
         assert_eq!(s.unlock("new").unwrap(), 1);
         let _ = std::fs::remove_dir_all(s.path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_login_saved_elsewhere_is_kept_when_this_store_saves() {
+        let mut laptop = fresh("two");
+        laptop.unlock("m").unwrap();
+        laptop.remember(Login { origin: "https://a.no".into(), username: "u".into(), password: "p".into(), used: 0 }).unwrap();
+        // The phone opens the same file and adds a login.
+        let mut phone = Store::new(laptop.path.clone());
+        phone.unlock("m").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        phone.remember(Login { origin: "https://b.no".into(), username: "v".into(), password: "q".into(), used: 0 }).unwrap();
+        // The laptop saves next, and the phone's login survives.
+        laptop.remember(Login { origin: "https://c.no".into(), username: "w".into(), password: "r".into(), used: 0 }).unwrap();
+        assert_eq!(laptop.logins().len(), 3);
+        let mut again = Store::new(laptop.path.clone());
+        assert_eq!(again.unlock("m").unwrap(), 3);
+        let _ = std::fs::remove_dir_all(laptop.path.parent().unwrap());
     }
 
     #[test]

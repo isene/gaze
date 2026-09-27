@@ -82,6 +82,8 @@ struct App {
     /// Sites allowed the microphone and the camera.
     mic_sites: config::DarkSites,
     hist: history::History,
+    /// Wakes gaze when the phone sends a tab.
+    tab_watch: Option<gio::FileMonitor>,
     /// What the command line offers right now, and which one Tab picked.
     offers: Vec<Offer>,
     selected: Option<usize>,
@@ -320,9 +322,10 @@ fn build(app: &gtk::Application) -> Shared {
     let mut tabs = Tabs::load(&session_path);
     for g in &cfg.groups { tabs.ensure_group(&g.name, &g.color); }
     let hist = history::History::load(dir.join("history"));
-    let store = Store::new(dir.join("passwords"));
+    let sync = move_into_sync();
+    let store = Store::new(sync.join("passwords"));
     let keymap = keys::Keymap::load(dir.join("keys.yml"));
-    let marks = bookmarks::Bookmarks::load(dir.join("bookmarks"));
+    let marks = bookmarks::Bookmarks::load(sync.join("bookmarks"));
     let dark_sites = config::DarkSites::load(dir.join("dark"));
     let mic_sites = config::DarkSites::load_noted(dir.join("mic"), "Sites allowed to use the microphone and the camera.");
     let shared: Shared = Rc::new(RefCell::new(App {
@@ -331,7 +334,7 @@ fn build(app: &gtk::Application) -> Shared {
         mode: Mode::Normal, keys: String::new(), ask: Ask::Command, prompt: None,
         message: String::new(), hover: String::new(), store, fill_at: HashMap::new(),
         closed: Vec::new(), find: String::new(), session_path, save_pending: false,
-        keymap, marks, dark_sites, mic_sites, hist, offers: Vec::new(), selected: None, setting_text: false, filter: None,
+        keymap, marks, dark_sites, mic_sites, hist, tab_watch: None, offers: Vec::new(), selected: None, setting_text: false, filter: None,
     }));
 
     let keys = gtk::EventControllerKey::new();
@@ -367,7 +370,76 @@ fn build(app: &gtk::Application) -> Shared {
     if !restored.is_empty() { show_active(&shared); }
     window.present();
     adblock_start(&shared);
+    watch_tabs(&shared);
     shared
+}
+
+/// The folder Syncthing shares with the phone: the passwords, the
+/// bookmarks and the tabs sent across.
+fn sync_path() -> PathBuf { config::gaze_dir().join("sync") }
+
+/// The sync folder, with the passwords and the bookmarks moved in from
+/// ~/.gaze the first time.
+fn move_into_sync() -> PathBuf {
+    let (dir, sync) = (config::gaze_dir(), sync_path());
+    for name in ["passwords", "bookmarks"] {
+        let (old, new) = (dir.join(name), sync.join(name));
+        if old.exists() && !new.exists() {
+            let _ = std::fs::create_dir_all(&sync);
+            let _ = std::fs::rename(&old, &new);
+        }
+    }
+    sync
+}
+
+/// Put the page in ~/.gaze/sync/tabs/to-phone/ for the phone's gaze.
+fn send_to_phone(url: &str, title: &str) -> Result<(), String> {
+    let dir = sync_path().join("tabs/to-phone");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let line = |s: &str| s.replace(['\t', '\n', '\r'], " ").trim().to_string();
+    let tmp = dir.join(format!(".{}.tab.tmp", ms));
+    std::fs::write(&tmp, format!("{}\t{}\n", line(url), line(title))).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, dir.join(format!("{}.tab", ms))).map_err(|e| e.to_string())
+}
+
+/// A tab the phone sends lands in ~/.gaze/sync/tabs/to-laptop/ as a file
+/// of its own. It opens in the background and the file goes. inotify
+/// wakes gaze only when one lands.
+fn watch_tabs(shared: &Shared) {
+    let dir = sync_path().join("tabs/to-laptop");
+    let _ = std::fs::create_dir_all(&dir);
+    open_sent_tabs(shared, &dir);
+    let Ok(monitor) = gio::File::for_path(&dir).monitor_directory(gio::FileMonitorFlags::WATCH_MOVES, gio::Cancellable::NONE) else { return };
+    let s = shared.clone();
+    monitor.connect_changed(move |_, _, _, event| {
+        // Syncthing writes a hidden file and renames it; a plain write
+        // is done when the writer closes it. A bare "created" may still
+        // be empty, so it waits for one of those.
+        if matches!(event, gio::FileMonitorEvent::ChangesDoneHint | gio::FileMonitorEvent::MovedIn | gio::FileMonitorEvent::Renamed) {
+            open_sent_tabs(&s, &dir);
+        }
+    });
+    shared.borrow_mut().tab_watch = Some(monitor);
+}
+
+fn open_sent_tabs(shared: &Shared, dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut files: Vec<PathBuf> = entries.flatten().map(|e| e.path())
+        .filter(|p| p.is_file() && !p.file_name().and_then(|n| n.to_str()).unwrap_or(".").starts_with('.'))
+        .collect();
+    files.sort();
+    let mut n = 0;
+    for f in files {
+        let text = std::fs::read_to_string(&f).unwrap_or_default();
+        if std::fs::remove_file(&f).is_err() { continue; }
+        let url = text.lines().next().and_then(|l| l.split('\t').next()).unwrap_or("").trim().to_string();
+        if !url.starts_with("http") { continue; }
+        open_tab(shared, &url, true);
+        n += 1;
+    }
+    if n == 1 { set_message(shared, "A tab from the phone"); }
+    if n > 1 { set_message(shared, &format!("{} tabs from the phone", n)); }
 }
 
 fn style(font_size: u32) {
@@ -1390,6 +1462,7 @@ fn offers_for(a: &App, text: &str) -> Vec<Offer> {
 }
 
 fn on_entry_changed(shared: &Shared) {
+    if let Ok(mut a) = shared.try_borrow_mut() { a.marks.refresh(); }
     let offers = {
         let a = shared.borrow();
         if a.setting_text || a.mode != Mode::Command || !matches!(a.ask, Ask::Command) { return; }
@@ -1601,6 +1674,13 @@ fn run_command(shared: &Shared, line: &str) {
             }
         }
         "bookmarks" => { open_tab(shared, "gaze://bookmarks", false); }
+        "send" => {
+            if !uri.starts_with("http") { set_message(shared, "Nothing to send from here"); return; }
+            match send_to_phone(&uri, &title) {
+                Ok(()) => set_message(shared, "Sent to the phone"),
+                Err(e) => set_message(shared, &format!("Could not send it: {}", e)),
+            }
+        }
         "bookmark-import" => {
             if arg.is_empty() { set_message(shared, "bookmark-import <bookmarks.html> (Firefox: Manage Bookmarks → Import and Backup → Export)"); return; }
             let path = config::expand(arg);
@@ -1746,6 +1826,7 @@ fn after_unlock(shared: &Shared, then: Then) {
 /// When a page has finished loading: fill its login form if the store is
 /// open and knows the site, or say how to open the store if it is not.
 fn maybe_fill(shared: &Shared, id: u64) {
+    shared.borrow_mut().store.refresh();
     let (is_current, unlocked, exists) = {
         let a = shared.borrow();
         (a.tabs.current().map(|t| t.id) == Some(id), a.store.unlocked(), a.store.exists())
@@ -1772,6 +1853,7 @@ fn maybe_fill(shared: &Shared, id: u64) {
 /// Fill the current page with a saved login: the most recent first, then
 /// the next one each time `gp` is pressed.
 fn fill_next(shared: &Shared, first: bool) {
+    shared.borrow_mut().store.refresh();
     if !shared.borrow().store.unlocked() {
         begin_ask(shared, Ask::Master(Then::Fill), "");
         return;
@@ -1974,7 +2056,8 @@ fn esc(s: &str) -> String {
 
 fn passwords_page() -> String {
     let rows = with_app(|s| {
-        let a = s.borrow();
+        let mut a = s.borrow_mut();
+        a.store.refresh();
         if !a.store.unlocked() { return None; }
         let mut logins: Vec<&Login> = a.store.logins().iter().collect();
         logins.sort_by(|x, y| passwords::site_key(&x.origin).cmp(&passwords::site_key(&y.origin)).then(x.username.cmp(&y.username)));
@@ -2006,7 +2089,8 @@ const LOGO: &str = include_str!("../img/gaze.svg");
 
 fn bookmarks_page() -> String {
     let rows = with_app(|s| {
-        let a = s.borrow();
+        let mut a = s.borrow_mut();
+        a.marks.refresh();
         a.marks.list().iter().map(|b| {
             let title = if b.title.is_empty() { b.url.clone() } else { b.title.clone() };
             format!("<tr><td><a href=\"{}\">{}</a></td><td class=u>{}</td></tr>", esc(&b.url), esc(&title), esc(&b.url))
@@ -2017,7 +2101,7 @@ fn bookmarks_page() -> String {
                 <code>:bookmark-import ~/bookmarks.html</code> reads a Firefox export.</p>".to_string();
     }
     format!("<h1>Bookmarks</h1><p><kbd>f</kbd> then the letters opens one. <kbd>M</kbd> adds the current page, \
-             <code>:bookmark-del</code> removes it. The list is <code>~/.gaze/bookmarks</code>, a text file.</p>\
+             <code>:bookmark-del</code> removes it. The list is <code>~/.gaze/sync/bookmarks</code>, a text file.</p>\
              <table>{}</table>", rows)
 }
 
@@ -2052,6 +2136,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Tab groups", "group-close", "close every tab of the group"), ("Tab groups", "group-delete [name]", "drop an empty group"),
     ("Tab groups", "groups", "list the groups"),
     ("Bookmarks", "bookmark-add [title]", "bookmark this page"), ("Bookmarks", "bookmark-del [url]", "forget this page's bookmark"),
+    ("Tabs", "send", "open this page in gaze on the phone"),
     ("Bookmarks", "bookmarks", "the list, at gaze://bookmarks"), ("Bookmarks", "bookmark-import <file>", "read a Firefox HTML export"),
     ("Passwords", "fill", "fill the login form; again for the next saved login of the site"),
     ("Passwords", "passwords", "list the sites and usernames"), ("Passwords", "password-import <csv>", "read the CSV Firefox writes from about:logins → Export, then delete it"),
@@ -2114,7 +2199,7 @@ the commands; after <code>group</code> and its kin it is the group names, after 
 <kbd>o</kbd> lists the pages you were at last; typing narrows the list to pages whose URL or title holds every word,
 bookmarks (★) first. Visits are kept in <code>~/.gaze/history</code>, the last five thousand pages.</p>
 </div><div><h2>Passwords</h2>
-<p>Logins live in <code>~/.gaze/passwords</code>, sealed with a master password you choose the first time.
+<p>Logins live in <code>~/.gaze/sync/passwords</code>, sealed with a master password you choose the first time.
 A login form is filled when the page loads; after a sign-in with a new or changed password gaze asks whether to save it.
 A site's HTTP password dialog is answered from the store too, when it is open.</p>
 <h2>Ad blocking</h2>
@@ -2123,7 +2208,8 @@ to <code>~/.gaze/adblock/hosts</code> and compiles it into a WebKit content filt
 <code>:adblock-update</code> fetches it again.</p>
 <h2>Files</h2>
 <p><code>~/.gaze/config.yml</code>: home page, search engine, download folder, zoom, scroll step, ad blocking, text size of the bars.
-<code>~/.gaze/keys.yml</code>: your key changes. <code>~/.gaze/bookmarks</code>: one per line.
+<code>~/.gaze/keys.yml</code>: your key changes. <code>~/.gaze/sync/bookmarks</code>: one per line.
+<code>~/.gaze/sync/</code>: shared with the phone's gaze through Syncthing (passwords, bookmarks, tabs sent across).
 <code>~/.gaze/session.json</code>: the open tabs and groups.</p>
 </div></div>
 "#, logo = LOGO, ver = env!("CARGO_PKG_VERSION"), cards = cards)
