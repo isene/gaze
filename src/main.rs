@@ -140,6 +140,14 @@ fn main() {
             std::env::set_var("LP_NUM_THREADS", "1");
         }
     }
+    // The window is put together on the chip too, where the page already
+    // is. A desktop that asks every program for GTK's cairo renderer would
+    // otherwise have each frame copied back to the processor: on a moving
+    // page that measured 307% of a core in gaze and 10.5 W, against 38%
+    // and 8.0 W with ngl (2026-09-29, on frame).
+    if std::env::var_os("GAZE_CPU").is_none() && std::env::var("GSK_RENDERER").is_ok_and(|r| r == "cairo") {
+        std::env::set_var("GSK_RENDERER", "ngl");
+    }
     // Never wake a discrete card: it is watts for nothing on a browser.
     if std::env::var_os("__EGL_VENDOR_LIBRARY_FILENAMES").is_none() {
         let mesa = "/usr/share/glvnd/egl_vendor.d/50_mesa.json";
