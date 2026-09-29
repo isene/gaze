@@ -1629,8 +1629,8 @@ fn run_command(shared: &Shared, line: &str) {
             Ok(share) => scroll_page(shared, share),
             Err(_) => set_message(shared, "scroll-page <share of the window>, 0.5 is half a page down"),
         },
-        "scroll-top" => with_view(shared, |v| run_js(v, js::SCROLL_TOP)),
-        "scroll-bottom" => with_view(shared, |v| run_js(v, js::SCROLL_BOTTOM)),
+        "scroll-top" => with_view(shared, |v| run_js(v, &js::scroll_to(false))),
+        "scroll-bottom" => with_view(shared, |v| run_js(v, &js::scroll_to(true))),
         "find" => { if arg.is_empty() { begin_ask(shared, Ask::Find, ""); } else { find(shared, arg); } }
         "find-next" => with_find(shared, |f| f.search_next()),
         "find-prev" => with_find(shared, |f| f.search_previous()),

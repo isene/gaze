@@ -198,17 +198,36 @@ pub const PAGE: &str = r#"
 })();
 "#;
 
+/// What a scroll key moves: the page when the page can move that way,
+/// or else the box under the middle of the window that can, the way a
+/// trackpad picks the box under the pointer. Web apps such as Suno keep
+/// their content in a box of its own, where moving the page moves nothing.
+const TARGET: &str = r#"((dx, dy) => {
+  const page = document.scrollingElement || document.documentElement;
+  if ((dy !== 0 && page.scrollHeight > innerHeight + 1) || (dx !== 0 && page.scrollWidth > innerWidth + 1)) return window;
+  const can = e => { const s = getComputedStyle(e);
+    return (dy !== 0 && /auto|scroll|overlay/.test(s.overflowY) && e.scrollHeight > e.clientHeight + 1)
+        || (dx !== 0 && /auto|scroll|overlay/.test(s.overflowX) && e.scrollWidth > e.clientWidth + 1); };
+  let e = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+  while (e && !can(e)) e = e.parentElement;
+  return e || window;
+})"#;
+
 /// Scroll by a number of pixels, or a share of the window when `page`.
 pub fn scroll(dx: i32, dy: f64, page: bool) -> String {
     if page {
-        format!("window.scrollBy({{left: 0, top: innerHeight * {}, behavior: 'instant'}})", dy)
+        format!("(() => {{ const t = {t}(0, 1); const h = t === window ? innerHeight : t.clientHeight; \
+                 t.scrollBy({{left: 0, top: h * {dy}, behavior: 'instant'}}); }})()", t = TARGET, dy = dy)
     } else {
-        format!("window.scrollBy({{left: {}, top: {}, behavior: 'instant'}})", dx, dy)
+        format!("{t}({dx}, {dy}).scrollBy({{left: {dx}, top: {dy}, behavior: 'instant'}})", t = TARGET, dx = dx, dy = dy)
     }
 }
 
-pub const SCROLL_TOP: &str = "window.scrollTo({top: 0, behavior: 'instant'})";
-pub const SCROLL_BOTTOM: &str = "window.scrollTo({top: document.documentElement.scrollHeight, behavior: 'instant'})";
+/// To the top, or to the bottom when `end`.
+pub fn scroll_to(end: bool) -> String {
+    format!("(() => {{ const t = {t}(0, 1); const el = t === window ? (document.scrollingElement || document.documentElement) : t; \
+             t.scrollTo({{top: {top}, behavior: 'instant'}}); }})()", t = TARGET, top = if end { "el.scrollHeight" } else { "0" })
+}
 
 /// Dark mode for pages that have none of their own. gaze first asks for
 /// a dark page through the GTK theme, which sites with a dark style pick
