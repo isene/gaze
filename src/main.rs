@@ -105,6 +105,28 @@ fn with_app<R>(f: impl FnOnce(&Shared) -> R) -> Option<R> {
 }
 
 fn main() {
+    // --version and --help answer here, before anything starts. Passed on,
+    // they would reach the gaze already running and open as a search.
+    if let Some(a) = std::env::args().nth(1) {
+        if a == "-v" || a == "--version" {
+            println!("gaze {}", env!("CARGO_PKG_VERSION"));
+            return;
+        }
+        if a == "-h" || a == "--help" {
+            println!("gaze — web browser around WebKitGTK (Fe2O3 suite)");
+            println!();
+            println!("Usage: gaze [URL or search words]...");
+            println!();
+            println!("Each argument opens in a tab; with a gaze already running, in that one.");
+            println!("A mailto: link goes to the mail program instead (mail in the config).");
+            println!("  -v, --version         print version");
+            println!("  -h, --help            this text");
+            println!();
+            println!("Keys work like vim and qutebrowser; ? shows them all.");
+            println!("Config and data live in ~/.gaze/.");
+            return;
+        }
+    }
     arm_crash_log();
     // With GL switched off by GDK_DISABLE=gl, WebKit's UI process
     // crashes on pages with video (YouTube); left to find out for itself
