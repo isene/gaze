@@ -617,6 +617,13 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
                 PolicyDecisionType::NavigationAction => {
                     let Some(nav) = decision.downcast_ref::<NavigationPolicyDecision>() else { return false };
                     let Some(action) = nav.navigation_action() else { return false };
+                    // A mail link, clicked or followed by a hint: WebKit has
+                    // no page to show for it, so it stops here.
+                    if let Some(uri) = action.request().and_then(|r| r.uri()).filter(|u| is_mail(u)) {
+                        mail(&s, &uri);
+                        decision.ignore();
+                        return true;
+                    }
                     if action.is_user_gesture() {
                         if let Some(uri) = action.request().and_then(|r| r.uri()) {
                             if is_video(&s, &uri) {
@@ -660,6 +667,10 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
             // window at all: the player takes it, and no empty tab is
             // left behind.
             if let Some(uri) = action.request().and_then(|r| r.uri()) {
+                if is_mail(&uri) {
+                    mail(&s, &uri);
+                    return None;
+                }
                 if is_video(&s, &uri) {
                     play(&s, &uri);
                     return None;
@@ -1018,17 +1029,49 @@ fn play(shared: &Shared, uri: &str) {
     }
 }
 
+/// A mail link is no page. It goes to the mail program, and no tab opens.
+fn is_mail(uri: &str) -> bool {
+    uri.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("mailto:"))
+}
+
+/// Hand a mail link to the mail program, detached, and show what the
+/// program answers. The link is one argument, never a shell line.
+fn mail(shared: &Shared, uri: &str) {
+    let cmd = shared.borrow().cfg.mail.clone();
+    let mut words = cmd.split_whitespace();
+    let Some(program) = words.next() else { set_message(shared, "No mail program: name one as mail in config.yml"); return };
+    let null = std::process::Stdio::null;
+    match std::process::Command::new(program).args(words).arg(uri)
+        .stdin(null()).stdout(std::process::Stdio::piped()).stderr(null()).spawn() {
+        Ok(mut child) => {
+            set_message(shared, &format!("Mail link handed to {cmd}"));
+            // gaze never waits for the program. When it is done, its first
+            // line, if it said anything, replaces the note above.
+            let mut out = child.stdout.take();
+            let s = shared.clone();
+            glib::child_watch_add_local(glib::Pid(child.id() as i32), move |_, _| {
+                use std::io::Read;
+                let mut said = String::new();
+                if let Some(mut o) = out.take() { let _ = o.read_to_string(&mut said); }
+                if let Some(line) = said.lines().next().filter(|l| !l.trim().is_empty()) { set_message(&s, line); }
+            });
+        }
+        Err(e) => set_message(shared, &format!("{program}: {e}")),
+    }
+}
+
 /// Load a URL here or in a new tab, unless it is a video: that goes to
 /// the player.
 fn open_or_play(shared: &Shared, uri: &str, new_tab: bool) {
-    if is_video(shared, uri) { play(shared, uri); }
+    if is_mail(uri) { mail(shared, uri); }
+    else if is_video(shared, uri) { play(shared, uri); }
     else if new_tab { open_tab(shared, uri, false); }
     else { with_view(shared, |v| v.load_uri(uri)); }
 }
 
 fn open_tab(shared: &Shared, uri: &str, background: bool) -> u64 {
-    if is_video(shared, uri) {
-        play(shared, uri);
+    if is_mail(uri) || is_video(shared, uri) {
+        if is_mail(uri) { mail(shared, uri); } else { play(shared, uri); }
         return shared.borrow().tabs.current().map(|t| t.id).unwrap_or(0);
     }
     let id = shared.borrow_mut().tabs.open(uri, background);

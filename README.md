@@ -121,6 +121,10 @@ A video page goes to `mpv` instead of the browser: a click on a YouTube link, a 
 
 `video_player` in the config names the program, empty keeps videos in gaze, and `video_urls` lists how a video page's address starts.
 
+## Mail links
+
+A `mailto:` link opens no tab. It goes to the program named as `mail` in the config, with the link as its last argument. The default is `kastrup --draft`, which queues a draft with the link's address, subject and text; `+` in kastrup opens it. `xdg-open` hands the link to the desktop's mail program instead.
+
 ## Spare web processes
 
 WebKitGTK 2.52 starts a spare web process after each page from a new site, then neither uses nor ends it. Each is 58 MB and wakes once a second; a day of browsing left 37 of them. gaze ends its own web processes that are still under 80 MB after a minute, when a page finishes loading or a tab closes. A process that has shown a page is 150 MB or more, so no page is touched.
