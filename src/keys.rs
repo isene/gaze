@@ -21,7 +21,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("H", "back"), ("L", "forward"), ("<Backspace>", "back"),
     ("<Ctrl-Left>", "back"), ("<Ctrl-Right>", "forward"),
     ("r", "reload"), ("R", "reload-force"),
-    ("o", "cmd open "), ("O", "cmd tabopen "), ("t", "cmd tabopen "),
+    ("o", "cmd open "), ("O", "cmd tabopen "), ("t", "cmd tabopen "), ("T", "cmd private "),
     ("go", "cmd open {url}"), ("gO", "cmd tabopen {url}"), (":", "cmd "),
     ("/", "find"), ("n", "find-next"), ("N", "find-prev"),
     ("f", "hint"), ("F", "hint-tab"),

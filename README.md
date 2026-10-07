@@ -25,6 +25,7 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 | `i`, `gi` | Insert mode (type into the page) / focus the first field. A click on a field enters it too; `Tab` moves to the next field; `Esc` leaves |
 | `yy`, `pp` / `PP` | Copy the URL; open what the clipboard holds here / in a new tab |
 | `t`, `d`, `u` | New tab, close tab, bring back the last closed |
+| `T` | New private tab (see Private tabs) |
 | `Left` / `Right`, `J` / `K`, `Alt-1`…`Alt-9` | Previous / next tab, tab by number |
 | `Shift-Left` / `Shift-Right` | Move the tab left / right |
 | `zc` / `zo` / `za` | Fold / unfold / toggle the current tab's group; `zM` and `zR` do all |
@@ -48,6 +49,19 @@ groups:
   - {name: Work, color: "#5faf87"}
   - {name: Home, color: orange}
 ```
+
+## Private tabs
+
+`T` opens a private tab, marked ⊘ in the tab bar. `:private <url>` does the same.
+
+- It is in no history and no session file, and `u` does not bring it back.
+- It does not see the cookies of your other tabs. Private tabs share theirs, in memory only.
+- A tab opened from a private tab is private too: a link, a popup, a URL you type there.
+- When the last private tab closes, its cookies, cache and site data go with it.
+- No login is filled or offered for saving. `gp` still fills one when you ask.
+- What you ask gaze to keep is kept: a download, a bookmark, a dark or microphone choice for the site.
+
+A private tab keeps your visit off this machine. The site and your network still see your address.
 
 ## Passwords
 

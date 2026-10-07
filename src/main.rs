@@ -60,6 +60,8 @@ struct App {
     tabs: Tabs,
     views: HashMap<u64, WebView>,
     session: NetworkSession,
+    /// The session private tabs share, while there is one.
+    private_session: Option<NetworkSession>,
     settings: Settings,
     mode: Mode,
     /// Keys typed so far of a two-key command (g, z, y, p, Z).
@@ -360,7 +362,7 @@ fn build(app: &gtk::Application) -> Shared {
     let mic_sites = config::DarkSites::load_noted(dir.join("mic"), "Sites allowed to use the microphone and the camera.");
     let shared: Shared = Rc::new(RefCell::new(App {
         ui: Ui { window: window.clone(), tabbar, stack, bottom, status, right, entry: entry.clone(), completion },
-        cfg, tabs, views: HashMap::new(), session, settings,
+        cfg, tabs, views: HashMap::new(), session, private_session: None, settings,
         mode: Mode::Normal, keys: String::new(), ask: Ask::Command, prompt: None,
         message: String::new(), hover: String::new(), store, fill_at: HashMap::new(),
         closed: Vec::new(), find: String::new(), session_path, save_pending: false,
@@ -492,10 +494,11 @@ fn style(font_size: u32) {
 /// listens to. Each view gets its own content manager so a message from
 /// the page says which tab sent it.
 fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
-    let (session, settings, zoom, filter, dark) = {
+    let (settings, zoom, filter, dark, private) = {
         let a = shared.borrow();
-        (a.session.clone(), a.settings.clone(), a.cfg.zoom, a.filter.clone(), dark_wanted(&a))
+        (a.settings.clone(), a.cfg.zoom, a.filter.clone(), dark_wanted(&a), a.tabs.is_private(id))
     };
+    let session = if private { private_session(shared) } else { shared.borrow().session.clone() };
     let ucm = UserContentManager::new();
     ucm.add_script(&page_script());
     if dark { ucm.add_script(&dark_script(&shared.borrow())); }
@@ -556,15 +559,16 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
                     refresh(&s);
                 }
                 LoadEvent::Finished => {
-                    {
-                        let mut a = s.borrow_mut();
+                    refresh(&s);
+                    // A private tab is in no history and no session file,
+                    // and a login is filled there only when asked (gp).
+                    if !private {
                         let (uri, title) = (v.uri().map(|u| u.to_string()).unwrap_or_default(),
                                             v.title().map(|t| t.to_string()).unwrap_or_default());
-                        a.hist.record(&uri, &title);
+                        s.borrow_mut().hist.record(&uri, &title);
+                        schedule_save(&s);
+                        maybe_fill(&s, id);
                     }
-                    refresh(&s);
-                    schedule_save(&s);
-                    maybe_fill(&s, id);
                     end_spare_web_processes();
                 }
                 _ => refresh(&s),
@@ -580,11 +584,11 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
                 if let Some(i) = a.tabs.index_of(id) {
                     a.tabs.tabs[i].title = title.clone();
                     let uri = a.tabs.tabs[i].uri.clone();
-                    a.hist.retitle(&uri, &title);
+                    if !private { a.hist.retitle(&uri, &title); }
                 }
             }
             refresh(&s);
-            schedule_save(&s);
+            if !private { schedule_save(&s); }
         });
     }
     {
@@ -597,7 +601,7 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
                 }
             }
             refresh(&s);
-            schedule_save(&s);
+            if !private { schedule_save(&s); }
         });
     }
     {
@@ -613,8 +617,9 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
     }
     // A page that fails to load leaves one line in ~/.gaze/errors.log:
     // the time, the address and what went wrong. It runs only on failure.
-    view.connect_load_failed(|_, _, uri, err| {
+    view.connect_load_failed(move |_, _, uri, err| {
         use std::io::Write;
+        if private { return false; }
         let path = config::expand("~/.gaze/errors.log");
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
@@ -630,7 +635,7 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
                     if let Some(nav) = decision.downcast_ref::<NavigationPolicyDecision>() {
                         if let Some(uri) = nav.navigation_action().and_then(|a| a.request()).and_then(|r| r.uri()) {
                             let s = s.clone();
-                            glib::idle_add_local_once(move || { open_tab(&s, &uri, true); });
+                            glib::idle_add_local_once(move || { open_tab_as(&s, &uri, true, private); });
                         }
                     }
                     decision.ignore();
@@ -660,7 +665,7 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
                     if wants_tab && action.is_user_gesture() {
                         if let Some(uri) = action.request().and_then(|r| r.uri()) {
                             let s = s.clone();
-                            glib::idle_add_local_once(move || { open_tab(&s, &uri, true); });
+                            glib::idle_add_local_once(move || { open_tab_as(&s, &uri, true, private); });
                             decision.ignore();
                             return true;
                         }
@@ -718,7 +723,7 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
         // open and know the host; otherwise WebKit's own dialog asks.
         let s = shared.clone();
         view.connect_authenticate(move |_, request| {
-            if request.is_retry() || request.is_for_proxy() { return false; }
+            if private || request.is_retry() || request.is_for_proxy() { return false; }
             let host = request.host().map(|h| h.to_string()).unwrap_or_default();
             let login = {
                 let a = s.borrow();
@@ -969,6 +974,9 @@ fn refresh(shared: &Shared) {
     a.ui.window.set_title(Some(&title));
 }
 
+/// Stands before the title of a private tab in the tab bar.
+const PRIVATE_MARK: &str = "⊘ ";
+
 fn tabbar_markup(tabs: &Tabs) -> String {
     let mut out = String::new();
     let mut last_group: Option<u64> = None;
@@ -997,7 +1005,7 @@ fn tabbar_markup(tabs: &Tabs) -> String {
         if n > 1 && i > first_shown { out.push_str("<span foreground=\"#5c5c5c\"> │</span>"); }
         let raw = if t.title.is_empty() { t.uri.trim_start_matches("https://").trim_start_matches("http://").to_string() } else { t.title.clone() };
         let short: String = raw.chars().take(20).collect();
-        let text = glib::markup_escape_text(short.trim());
+        let text = format!("{}{}", if t.private { PRIVATE_MARK } else { "" }, glib::markup_escape_text(short.trim()));
         let color = group.map(|g| tabs::color_hex(&g.color)).unwrap_or_else(|| (if t.pending { "#7a7a7a" } else { "#c8c8c8" }).to_string());
         if i == tabs.active {
             // The current tab: a light pill, its text in the group's colour.
@@ -1087,22 +1095,51 @@ fn mail(shared: &Shared, uri: &str) {
 fn open_or_play(shared: &Shared, uri: &str, new_tab: bool) {
     if is_mail(uri) { mail(shared, uri); }
     else if is_video(shared, uri) { play(shared, uri); }
-    else if new_tab { open_tab(shared, uri, false); }
+    else if new_tab { open_tab_as(shared, uri, false, current_private(shared)); }
     else { with_view(shared, |v| v.load_uri(uri)); }
 }
 
 fn open_tab(shared: &Shared, uri: &str, background: bool) -> u64 {
+    open_tab_as(shared, uri, background, false)
+}
+
+/// Open a tab, private or not. A tab opened from a private tab is private
+/// too: a link, a popup, and a URL typed while the private tab is current.
+fn open_tab_as(shared: &Shared, uri: &str, background: bool, private: bool) -> u64 {
     if is_mail(uri) || is_video(shared, uri) {
         if is_mail(uri) { mail(shared, uri); } else { play(shared, uri); }
         return shared.borrow().tabs.current().map(|t| t.id).unwrap_or(0);
     }
-    let id = shared.borrow_mut().tabs.open(uri, background);
+    let id = {
+        let mut a = shared.borrow_mut();
+        let id = a.tabs.open(uri, background);
+        if private { a.tabs.set_private(id); }
+        id
+    };
     let view = make_view(shared, id, None);
     view.load_uri(uri);
     attach(shared, id, view);
     if background { refresh(shared); } else { show_active(shared); }
-    save_session(shared);
+    if !private { save_session(shared); }
     id
+}
+
+fn current_private(shared: &Shared) -> bool {
+    shared.borrow().tabs.current().is_some_and(|t| t.private)
+}
+
+/// The session the private tabs share: cookies, cache and site data live
+/// in memory only. It is made for the first private tab and dropped when
+/// the last one closes, so the next private tab starts as a stranger.
+fn private_session(shared: &Shared) -> NetworkSession {
+    if let Some(s) = shared.borrow().private_session.clone() { return s; }
+    let session = NetworkSession::new_ephemeral();
+    // The same cookie rule as the ordinary tabs, for the same sign-ins.
+    if let Some(cm) = session.cookie_manager() { cm.set_accept_policy(CookieAcceptPolicy::Always); }
+    let downloads = config::expand(&shared.borrow().cfg.downloads);
+    session.connect_download_started(move |_, download| on_download(download, downloads.clone()));
+    shared.borrow_mut().private_session = Some(session.clone());
+    session
 }
 
 /// A tab for a window a page opens itself; WebKit loads it.
@@ -1115,7 +1152,12 @@ fn popup_tab(shared: &Shared, parent: &WebView) -> WebView {
     // says the new page is ready to show. Switching to it inside the
     // create signal crashed WebKit's UI process (YouTube Studio's
     // preview link did it).
-    let id = shared.borrow_mut().tabs.open_from("about:blank", true, opener);
+    let id = {
+        let mut a = shared.borrow_mut();
+        let id = a.tabs.open_from("about:blank", true, opener);
+        if opener.is_some_and(|o| a.tabs.is_private(o)) { a.tabs.set_private(id); }
+        id
+    };
     let view = make_view(shared, id, Some(parent));
     attach(shared, id, view.clone());
     {
@@ -1170,8 +1212,11 @@ fn close_tab(shared: &Shared, idx: usize) {
         let mut a = shared.borrow_mut();
         let Some(tab) = a.tabs.close(idx) else { return };
         let group = tab.group.and_then(|g| a.tabs.group_by_id(g)).map(|g| g.name.clone());
-        if tab.uri != "about:blank" { a.closed.push((tab.uri.clone(), group)); }
+        // A closed private tab is forgotten: u does not bring it back. With
+        // the last one goes the private session, cookies and all.
+        if tab.uri != "about:blank" && !tab.private { a.closed.push((tab.uri.clone(), group)); }
         if a.closed.len() > 50 { a.closed.remove(0); }
+        if tab.private && !a.tabs.tabs.iter().any(|t| t.private) { a.private_session = None; }
         a.fill_at.remove(&tab.id);
         (a.views.remove(&tab.id), a.cfg.home.clone())
     };
@@ -1548,7 +1593,7 @@ struct Offer {
 /// The verb and the query of an open prompt, or None for any other text.
 fn open_query(text: &str) -> Option<(&str, &str)> {
     let (verb, rest) = text.split_once(' ')?;
-    if matches!(verb, "open" | "o" | "tabopen" | "t") { Some((verb, rest)) } else { None }
+    if matches!(verb, "open" | "o" | "tabopen" | "t" | "private") { Some((verb, rest)) } else { None }
 }
 
 /// What the command line can offer for `text`: pages for an open prompt,
@@ -1674,6 +1719,10 @@ fn run_command(shared: &Shared, line: &str) {
         "tabopen" | "t" => {
             if arg.is_empty() { begin_ask(shared, Ask::Command, "tabopen "); }
             else { let u = config::to_uri(arg, &search); open_or_play(shared, &u, true); }
+        }
+        "private" => {
+            if arg.is_empty() { begin_ask(shared, Ask::Command, "private "); }
+            else { let u = config::to_uri(arg, &search); open_tab_as(shared, &u, false, true); }
         }
         "play" => {
             let target = if arg.is_empty() { uri.clone() } else { config::to_uri(arg, &search) };
@@ -2048,9 +2097,12 @@ fn on_message(shared: &Shared, id: u64, text: &str) {
         "open" => {
             let uri = v.get("uri").and_then(|u| u.as_str()).unwrap_or("").to_string();
             let background = v.get("background").and_then(|b| b.as_bool()).unwrap_or(true);
-            if !uri.is_empty() { open_tab(shared, &uri, background); }
+            let private = shared.borrow().tabs.is_private(id);
+            if !uri.is_empty() { open_tab_as(shared, &uri, background, private); }
         }
         "login" => {
+            // Nothing from a private tab is offered for saving.
+            if shared.borrow().tabs.is_private(id) { return; }
             let login = Login {
                 origin: v.get("origin").and_then(|s| s.as_str()).unwrap_or("").to_string(),
                 username: v.get("username").and_then(|s| s.as_str()).unwrap_or("").to_string(),
@@ -2236,6 +2288,7 @@ fn bookmarks_page() -> String {
 const COMMANDS: &[(&str, &str, &str)] = &[
     ("Open and go", "open [url]", "open a URL, a search or a file here; asks when given nothing"),
     ("Open and go", "tabopen [url]", "the same in a new tab"),
+    ("Open and go", "private [url]", "the same in a private tab: no history, and its cookies go when the last private tab closes"),
     ("Open and go", "cmd <text>", "open the command line with this text; {url} and {title} are filled in"),
     ("Open and go", "back", "go back"), ("Open and go", "forward", "go forward"),
     ("Open and go", "reload", "reload"), ("Open and go", "reload-force", "reload without the cache"), ("Open and go", "stop", "stop loading"),
@@ -2321,6 +2374,12 @@ names are plain characters, else <code>&lt;Ctrl-d&gt;</code>, <code>&lt;Alt-1&gt
 A folded group shows as its name and a count; its tabs are skipped until it is unfolded. A group with no tabs
 stays, dimmed at the end of the bar, until <code>:group-delete</code>. Groups come back with the session, and
 the <code>groups:</code> list in config.yml names groups that exist from the start.</p>
+<h2>Private tabs</h2>
+<p><kbd>T</kbd> opens a private tab, marked ⊘ in the tab bar. It is in no history and no session file, and it does not
+see the cookies of your other tabs. A tab opened from a private tab is private too, and they share their cookies.
+When the last one closes, the cookies and the cache go with it. No login is filled or saved unless you press
+<kbd>gp</kbd>. A download, a bookmark, and a dark or microphone choice for a site are still kept.
+The site and the network still see your address.</p>
 <h2>Command line</h2>
 <p><kbd>Tab</kbd> and <kbd>Shift-Tab</kbd> walk what the line offers and put it there. Before the first space that is
 the commands; after <code>group</code> and its kin it is the group names, after <code>group-color</code> the colours.

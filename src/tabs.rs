@@ -46,6 +46,9 @@ pub struct Tab {
     /// Restored from the session but not loaded yet.
     #[serde(skip)]
     pub pending: bool,
+    /// A private tab: never written to the session file.
+    #[serde(skip)]
+    pub private: bool,
 }
 
 #[derive(Default, Serialize, Deserialize, Debug)]
@@ -71,10 +74,30 @@ impl Tabs {
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
         if let Some(dir) = path.parent() { std::fs::create_dir_all(dir).map_err(|e| e.to_string())?; }
-        let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        let text = if self.tabs.iter().any(|t| t.private) { serde_json::to_string_pretty(&self.kept()) }
+                   else { serde_json::to_string_pretty(self) }.map_err(|e| e.to_string())?;
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    }
+
+    /// What the session file gets: every tab but the private ones. The
+    /// current tab is the same one, or the kept tab nearest before it.
+    fn kept(&self) -> Tabs {
+        let before = self.tabs.iter().take(self.active + 1).filter(|t| !t.private).count();
+        Tabs {
+            tabs: self.tabs.iter().filter(|t| !t.private).cloned().collect(),
+            groups: self.groups.clone(), active: before.saturating_sub(1), next_id: 0,
+        }
+    }
+
+    /// Make the tab private. Done once, right after it opens.
+    pub fn set_private(&mut self, id: u64) {
+        if let Some(i) = self.index_of(id) { self.tabs[i].private = true; }
+    }
+
+    pub fn is_private(&self, id: u64) -> bool {
+        self.index_of(id).is_some_and(|i| self.tabs[i].private)
     }
 
     pub fn len(&self) -> usize { self.tabs.len() }
@@ -102,7 +125,7 @@ impl Tabs {
         self.next_id += 1;
         let group = self.current().and_then(|t| t.group);
         let at = if self.tabs.is_empty() { 0 } else { self.active + 1 };
-        self.tabs.insert(at, Tab { id, uri: uri.to_string(), title: String::new(), group, opener, pending: false });
+        self.tabs.insert(at, Tab { id, uri: uri.to_string(), title: String::new(), group, opener, pending: false, private: false });
         if !background || self.tabs.len() == 1 { self.active = at; }
         id
     }
@@ -394,6 +417,26 @@ mod tests {
         let mut back = back;
         let id = back.open("z", false);
         assert!(t.tabs.iter().all(|x| x.id != id), "a restored session never reuses an id");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_private_tab_stays_out_of_the_session_file() {
+        let mut t = three();
+        t.active = 1;
+        let secret = t.open("https://secret.example/", false);
+        t.set_private(secret);
+        assert!(t.is_private(secret) && t.active == 2);
+        let dir = std::env::temp_dir().join(format!("gaze-private-{}", std::process::id()));
+        let path = dir.join("session.json");
+        t.save(&path).unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("secret"));
+        let back = Tabs::load(&path);
+        assert_eq!(back.tabs.len(), 3);
+        assert_eq!(back.active, 1, "the tab before the private one is current");
+        assert!(back.tabs.iter().all(|x| !x.private));
+        // The session in memory is as it was.
+        assert_eq!((t.tabs.len(), t.active), (4, 2));
         let _ = std::fs::remove_dir_all(dir);
     }
 
