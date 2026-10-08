@@ -723,11 +723,11 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
         // open and know the host; otherwise WebKit's own dialog asks.
         let s = shared.clone();
         view.connect_authenticate(move |_, request| {
-            if private || request.is_retry() || request.is_for_proxy() { return false; }
+            if private || request.is_for_proxy() { return false; }
             let host = request.host().map(|h| h.to_string()).unwrap_or_default();
             let login = {
                 let a = s.borrow();
-                if !a.store.unlocked() { None } else {
+                if request.is_retry() || !a.store.unlocked() { None } else {
                     a.store.for_site(&format!("https://{}", host)).first().map(|l| (*l).clone())
                         .or_else(|| a.store.for_site(&format!("http://{}", host)).first().map(|l| (*l).clone()))
                 }
@@ -737,7 +737,24 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
                     request.authenticate(Some(&Credential::new(&l.username, &l.password, CredentialPersistence::ForSession)));
                     true
                 }
-                None => false,
+                None => {
+                    // What you type into WebKit's dialog never passes the
+                    // page script, so the offer to save it starts here,
+                    // once the site has let the login in.
+                    let origin = request.security_origin().map(|o| o.to_str().to_string())
+                        .filter(|o| o.contains("://")).unwrap_or_else(|| format!("https://{}", host));
+                    let s = s.clone();
+                    request.connect_authenticated(move |_, credential| {
+                        let mut c = credential.clone();
+                        offer_save(&s, Login {
+                            origin: origin.clone(),
+                            username: c.username().map(|u| u.to_string()).unwrap_or_default(),
+                            password: c.password().map(|p| p.to_string()).unwrap_or_default(),
+                            used: 0,
+                        });
+                    });
+                    false
+                }
             }
         });
     }
@@ -2191,28 +2208,35 @@ fn on_message(shared: &Shared, id: u64, text: &str) {
                 password: v.get("password").and_then(|s| s.as_str()).unwrap_or("").to_string(),
                 used: 0,
             };
-            if login.password.is_empty() || login.origin.is_empty() || login.origin == "null" { return; }
-            let known = {
-                let a = shared.borrow();
-                a.store.unlocked() && a.store.for_site(&login.origin).iter()
-                    .any(|l| l.username == login.username && l.password == login.password)
-            };
-            if known { return; }
-            let busy = matches!(shared.borrow().mode, Mode::Command | Mode::Prompt);
-            if busy { return; }
-            let text = format!("Save the password of {} for {}? (y/n)",
-                if login.username.is_empty() { "(no username)" } else { &login.username }, passwords::site_key(&login.origin));
-            {
-                let mut a = shared.borrow_mut();
-                a.prompt = Some(Prompt::SaveLogin(login));
-                a.mode = Mode::Prompt;
-                a.keys.clear();
-                a.message = text;
-            }
-            refresh(shared);
+            offer_save(shared, login);
         }
         _ => {}
     }
+}
+
+/// Ask whether to keep a login a site just took, unless the open store
+/// has it already or the command line is busy.
+fn offer_save(shared: &Shared, login: Login) {
+    if login.password.is_empty() || login.origin.is_empty() || login.origin == "null" { return; }
+    let known = {
+        let a = shared.borrow();
+        a.store.unlocked() && a.store.for_site(&login.origin).iter()
+            .any(|l| l.username == login.username && l.password == login.password)
+    };
+    if known { return; }
+    let busy = matches!(shared.borrow().mode, Mode::Command | Mode::Prompt);
+    if busy { return; }
+    if std::env::var_os("GAZE_DEBUG").is_some() { eprintln!("gaze: offer to save {} for {}", login.username, passwords::site_key(&login.origin)); }
+    let text = format!("Save the password of {} for {}? (y/n)",
+        if login.username.is_empty() { "(no username)" } else { &login.username }, passwords::site_key(&login.origin));
+    {
+        let mut a = shared.borrow_mut();
+        a.prompt = Some(Prompt::SaveLogin(login));
+        a.mode = Mode::Prompt;
+        a.keys.clear();
+        a.message = text;
+    }
+    refresh(shared);
 }
 
 // ------------------------------------------------------------- ad block
@@ -2471,7 +2495,7 @@ bookmarks (★) first. Visits are kept in <code>~/.gaze/history</code>, the last
 </div><div><h2>Passwords</h2>
 <p>Logins live in <code>~/.gaze/sync/passwords</code>, sealed with a master password you choose the first time.
 A login form is filled when the page loads; after a sign-in with a new or changed password gaze asks whether to save it.
-A site's HTTP password dialog is answered from the store too, when it is open.</p>
+A site's HTTP password dialog is answered from the store too, when it is open; a login you type into it gets the same question.</p>
 <h2>Ad blocking</h2>
 <p>On by default (<code>adblock: false</code> in config.yml turns it off). The first start fetches Steven Black's hosts list
 to <code>~/.gaze/adblock/hosts</code> and compiles it into a WebKit content filter; every domain on the list is blocked.
