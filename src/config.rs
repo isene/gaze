@@ -33,6 +33,8 @@ pub struct Config {
     /// The terminal Ctrl-a opens Claude in, with whatever comes before
     /// the command: `glass --`, `xterm -e`, `alacritty -e`.
     pub terminal: String,
+    /// The editor Ctrl-g opens a text field in, in that terminal.
+    pub editor: String,
     /// The program a mailto: link goes to, with the link as its last
     /// argument: `kastrup --draft`, `xdg-open`. Empty does nothing.
     pub mail: String,
@@ -62,6 +64,7 @@ impl Default for Config {
             video_urls: ["https://www.youtube.com/watch", "https://m.youtube.com/watch", "https://youtu.be/", "https://www.youtube.com/shorts/", "https://vimeo.com/"]
                 .iter().map(|s| s.to_string()).collect(),
             terminal: "glass --".into(),
+            editor: "scribe".into(),
             mail: "kastrup --draft".into(),
         }
     }
@@ -92,6 +95,8 @@ video_urls:
 # The terminal Ctrl-a opens Claude in, with what comes before the command
 # (glass --, xterm -e, alacritty -e):
 terminal: glass --
+# The editor Ctrl-g opens a text field in, in that terminal:
+editor: scribe
 # A mail link (mailto:) goes to this program, with the link as its last
 # argument. kastrup --draft queues a draft for + in kastrup; xdg-open asks
 # the desktop for its mail program:

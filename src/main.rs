@@ -930,6 +930,73 @@ fn start_claude(terminal: &str, page: &str) -> String {
     }
 }
 
+/// Ctrl-g in a text field: its text opens in the editor, in a terminal
+/// window of its own, and what is saved there goes back into the field
+/// when that window closes. A password field is left alone.
+fn edit_text(shared: &Shared) {
+    let Some(view) = current_view(&shared.borrow()) else { return };
+    let (terminal, editor) = { let a = shared.borrow(); (a.cfg.terminal.clone(), a.cfg.editor.clone()) };
+    let shared = shared.clone();
+    let page = view.clone();
+    run_js_then(&view, "window.__gaze ? window.__gaze.editText() : null", move |v| {
+        let Some(text) = v.filter(|v| v.is_string()).map(|v| v.to_str().to_string()) else {
+            set_message(&shared, "No text field has the focus");
+            return;
+        };
+        let said = start_editor(&terminal, &editor, text, page);
+        set_message(&shared, &said);
+    });
+}
+
+/// Open the editor on `text` in a new terminal window. The text goes to a
+/// file only you can read; when the window closes, what the file holds
+/// goes into the field and the file goes.
+fn start_editor(terminal: &str, editor: &str, text: String, view: WebView) -> String {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut ed = editor.split_whitespace();
+    // glass runs a command only by its full path.
+    let program = ed.next().and_then(|name| {
+        if name.contains('/') { return Some(PathBuf::from(name)); }
+        std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join(name)).find(|f| f.is_file()))
+    });
+    let Some(program) = program else { return format!("The editor \"{editor}\" is not on the PATH (editor in config.yml)") };
+    let mut words = terminal.split_whitespace();
+    let Some(term) = words.next() else { return "Name a terminal in config.yml to open the editor in".into() };
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let file = std::env::temp_dir().join(format!("gaze-edit-{}-{nanos}.txt", std::process::id()));
+    let wrote = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&file)
+        .and_then(|mut f| f.write_all(text.as_bytes()));
+    if let Err(e) = wrote { return format!("Could not write the text for the editor: {e}"); }
+    let null = std::process::Stdio::null;
+    match std::process::Command::new(term).args(words).arg(&program).args(ed).arg(&file)
+        .stdin(null()).stdout(null()).stderr(null()).spawn() {
+        Ok(child) => {
+            // The page is not for another thread, so the watch stays on this one.
+            glib::child_watch_add_local(glib::Pid(child.id() as i32), move |_, _| {
+                let after = std::fs::read_to_string(&file).ok();
+                let _ = std::fs::remove_file(&file);
+                if let Some(new) = after.and_then(|a| saved(&text, a)) {
+                    run_js(&view, &format!("window.__gaze && window.__gaze.setText({})", js_str(&new)));
+                }
+            });
+            "The field opens in the editor".into()
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&file);
+            format!("{term}: {e}")
+        }
+    }
+}
+
+/// What goes back into a field after the editor: nothing when the text is
+/// as it was. An editor ends a file with a newline; a field that had none
+/// gets none.
+fn saved(before: &str, after: String) -> Option<String> {
+    let after = if before.ends_with('\n') { after } else { after.strip_suffix('\n').map(str::to_string).unwrap_or(after) };
+    (after != before).then_some(after)
+}
+
 fn run_js(view: &WebView, code: &str) {
     view.evaluate_javascript(code, None, None, None::<&gio::Cancellable>, |_| {});
 }
@@ -1358,6 +1425,8 @@ fn on_key(shared: &Shared, key: gdk::Key, state: gdk::ModifierType) -> glib::Pro
             // Tab walks the page's fields; left to GTK it would walk widgets.
             if key == gdk::Key::Tab { with_view(shared, |v| run_js(v, "window.__gaze && window.__gaze.focusNext(1)")); return Stop; }
             if key == gdk::Key::ISO_Left_Tab { with_view(shared, |v| run_js(v, "window.__gaze && window.__gaze.focusNext(-1)")); return Stop; }
+            // Ctrl-g hands the field's text to the editor.
+            if ctrl && ch == Some('g') { edit_text(shared); return Stop; }
             Proceed
         }
         Mode::Hint => {
@@ -1752,6 +1821,7 @@ fn run_command(shared: &Shared, line: &str) {
         "hint-tab" => start_hints(shared, true),
         "insert" => { set_mode(shared, Mode::Insert); with_view(shared, |v| { v.grab_focus(); }); }
         "focus-input" => with_view(shared, |v| run_js(v, "window.__gaze && window.__gaze.focusFirstInput()")),
+        "edit-text" => edit_text(shared),
         "yank" => {
             let text = if arg == "title" { title } else { uri };
             clipboard().set_text(&text);
@@ -2295,6 +2365,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Open and go", "home", "the home page from config.yml"),
     ("On the page", "hint", "type the letters on a link to follow it"), ("On the page", "hint-tab", "the same, into a background tab"),
     ("On the page", "insert", "insert mode: keys go to the page until Esc"), ("On the page", "focus-input", "focus the first field on the page"),
+    ("On the page", "edit-text", "the focused field's text in your editor, back in the field when you close it; Ctrl-g in insert mode"),
     ("On the page", "scroll-down", "scroll"), ("On the page", "scroll-up", ""), ("On the page", "scroll-left", ""), ("On the page", "scroll-right", ""),
     ("On the page", "scroll-page <share>", "scroll by a share of the window; 0.5 is half a page down, -0.5 up"),
     ("On the page", "scroll-top", "to the top"), ("On the page", "scroll-bottom", "to the bottom"),
@@ -2400,4 +2471,17 @@ to <code>~/.gaze/adblock/hosts</code> and compiles it into a WebKit content filt
 <code>~/.gaze/session.json</code>: the open tabs and groups.</p>
 </div></div>
 "#, logo = LOGO, ver = env!("CARGO_PKG_VERSION"), cards = cards)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::saved;
+
+    #[test]
+    fn the_editor_s_last_newline_stays_out_of_a_field_that_had_none() {
+        assert_eq!(saved("one", "one\n".into()), None, "saved as it was");
+        assert_eq!(saved("one", "two\n".into()).as_deref(), Some("two"));
+        assert_eq!(saved("one\n", "one\ntwo\n".into()).as_deref(), Some("one\ntwo\n"));
+        assert_eq!(saved("", "".into()), None);
+    }
 }

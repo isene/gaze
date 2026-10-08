@@ -76,6 +76,26 @@ pub const PAGE: &str = r#"
     },
     hasPasswordField() { return passwordFields().length > 0; },
 
+    // ---- a field's text, for an editor outside the browser ----
+    editText() {
+      const el = document.activeElement;
+      if (!editable(el) || el.tagName === 'SELECT' || (el.type || '').toLowerCase() === 'password') return null;
+      this.edited = el;
+      return el.isContentEditable ? el.innerText : el.value;
+    },
+    setText(v) {
+      const el = this.edited;
+      this.edited = null;
+      if (!el || !el.isConnected) return false;
+      el.focus();
+      if (el.isContentEditable) {
+        // As typing would do it, so the page's own editor follows.
+        document.execCommand('selectAll', false, null);
+        document.execCommand('insertText', false, v);
+      } else setValue(el, v);
+      return true;
+    },
+
     // ---- logins ----
     captureLogins() {
       const remember = () => {

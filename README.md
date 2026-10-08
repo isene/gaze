@@ -23,6 +23,7 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 | `Ctrl-f` | Only the page: hide the tab bar and the status line; again to bring them back |
 | `D` | Dark pages on or off for this site, kept for next time (see Dark pages) |
 | `i`, `gi` | Insert mode (type into the page) / focus the first field. A click on a field enters it too; `Tab` moves to the next field; `Esc` leaves |
+| `Ctrl-g` | In a text field: its text opens in your editor, in a new terminal window, and comes back into the field when you close it (`editor` in the config, `scribe` unless you change it; never a password field) |
 | `yy`, `pp` / `PP` | Copy the URL; open what the clipboard holds here / in a new tab |
 | `t`, `d`, `u` | New tab, close tab, bring back the last closed |
 | `T` | New private tab (see Private tabs) |
@@ -71,6 +72,7 @@ Logins live in `~/.gaze/sync/passwords`, one file sealed with ChaCha20-Poly1305 
 - After you log in with a new or changed password, gaze asks whether to save it: `y` or `n`.
 - A site's HTTP password dialog is answered from the store too, when it is open.
 - `:passwords` lists the sites and usernames. Passwords themselves are never shown.
+- `:password-master` asks for a new master password and seals the file under it. Unlock first (`gp`).
 - `:password-import ~/logins.csv` reads the file Firefox writes from `about:logins` → Export Logins. gaze deletes the CSV after a successful import.
 
 ## The phone
