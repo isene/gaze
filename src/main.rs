@@ -34,7 +34,7 @@ enum Mode { Normal, Insert, Hint, Command, Prompt }
 
 /// What the command line at the bottom is asking for.
 #[derive(Clone, Debug)]
-enum Ask { Command, Find, GroupName, Master(Then), NewMaster }
+enum Ask { Command, Find, GroupName, Master(Then), NewMaster, Again(String) }
 
 /// What to do once the passwords are unlocked.
 #[derive(Clone, Debug)]
@@ -1582,13 +1582,14 @@ fn begin_ask(shared: &Shared, ask: Ask, prefill: &str) {
         let mut a = shared.borrow_mut();
         a.mode = Mode::Command;
         a.keys.clear();
-        let hidden = matches!(ask, Ask::Master(_) | Ask::NewMaster);
+        let hidden = matches!(ask, Ask::Master(_) | Ask::NewMaster | Ask::Again(_));
         let hint = match &ask {
             Ask::Command => ":",
             Ask::Find => "/",
             Ask::GroupName => "group name:",
             Ask::Master(_) => if a.store.exists() { "master password:" } else { "new master password (blank for none):" },
             Ask::NewMaster => "new master password (blank for none):",
+            Ask::Again(_) => "the same once more:",
         };
         a.ask = ask;
         let e = a.ui.entry.clone();
@@ -1629,7 +1630,11 @@ fn entry_done(shared: &Shared) {
         Ask::Command => run_command(shared, &text),
         Ask::Find => find(shared, &text),
         Ask::GroupName => group_current(shared, &text),
-        Ask::NewMaster => {
+        // Typed unseen, so typed twice: one slip would seal every login
+        // under a password nobody knows.
+        Ask::NewMaster => begin_ask(shared, Ask::Again(text), ""),
+        Ask::Again(first) => {
+            if first != text { set_message(shared, "The two were not the same; the master password is as it was"); return; }
             let r = shared.borrow_mut().store.change_master(&text);
             match r {
                 Ok(()) => set_message(shared, "Master password changed"),
