@@ -70,7 +70,8 @@ Logins live in `~/.gaze/sync/passwords`, one file sealed with ChaCha20-Poly1305 
 
 - A login page gets filled when it loads, with the login you used last on that site. `gp` cycles through the others.
 - After you log in with a new or changed password, gaze asks whether to save it: `y` or `n`.
-- A site's HTTP password dialog is answered from the store too, when it is open. A login you type into that dialog gets the same question.
+- A site's HTTP password dialog is answered from the store too. With the store locked, gaze asks for the master password first; `Esc` there gives you the dialog to type in.
+- In that dialog the keys are its own: type, `Tab` to the password, `Enter`. `Esc` closes it. A login typed there gets the same question.
 - `:passwords` lists the sites and usernames. Passwords themselves are never shown.
 - `:password-master` asks for a new master password, twice, and seals the file under it. Unlock first (`gp`).
 - `:password-import ~/logins.csv` reads the file Firefox writes from `about:logins` → Export Logins. gaze deletes the CSV after a successful import.

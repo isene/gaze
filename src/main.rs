@@ -15,12 +15,12 @@ use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use javascriptcore6 as jsc;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use webkit6::prelude::*;
 use webkit6::{
-    CookieAcceptPolicy, CookiePersistentStorage, Credential, CredentialPersistence, Download, FindOptions, LoadEvent,
+    AuthenticationRequest, CookieAcceptPolicy, CookiePersistentStorage, Credential, CredentialPersistence, Download, FindOptions, LoadEvent,
     NavigationPolicyDecision, NetworkSession, PolicyDecisionType, ResponsePolicyDecision, Settings,
     URISchemeRequest, UserContentFilter, UserContentFilterStore, UserContentInjectedFrames,
     UserContentManager, UserScript, UserScriptInjectionTime, WebContext, WebView,
@@ -38,7 +38,7 @@ enum Ask { Command, Find, GroupName, Master(Then), NewMaster, Again(String) }
 
 /// What to do once the passwords are unlocked.
 #[derive(Clone, Debug)]
-enum Then { Fill, Save(Login), Import(String), List, Remove(String) }
+enum Then { Fill, Save(Login), Import(String), List, Remove(String), Answer(u64, AuthenticationRequest) }
 
 #[derive(Clone, Debug)]
 enum Prompt { SaveLogin(Login) }
@@ -73,6 +73,11 @@ struct App {
     store: Store,
     /// Which of a site's logins was filled last, per tab.
     fill_at: HashMap<u64, usize>,
+    /// WebKit's own login box, per tab that shows one: the keys are its.
+    login_boxes: HashMap<u64, AuthenticationRequest>,
+    /// Tabs whose next login box goes to WebKit at once, master password
+    /// or not.
+    typed: HashSet<u64>,
     /// Closed tabs, newest last: uri and group name.
     closed: Vec<(String, Option<String>)>,
     find: String,
@@ -364,7 +369,7 @@ fn build(app: &gtk::Application) -> Shared {
         ui: Ui { window: window.clone(), tabbar, stack, bottom, status, right, entry: entry.clone(), completion },
         cfg, tabs, views: HashMap::new(), session, private_session: None, settings,
         mode: Mode::Normal, keys: String::new(), ask: Ask::Command, prompt: None,
-        message: String::new(), hover: String::new(), store, fill_at: HashMap::new(),
+        message: String::new(), hover: String::new(), store, fill_at: HashMap::new(), login_boxes: HashMap::new(), typed: HashSet::new(),
         closed: Vec::new(), find: String::new(), session_path, save_pending: false,
         keymap, marks, dark_sites, mic_sites, hist, tab_watch: None, offers: Vec::new(), selected: None, setting_text: false, filter: None,
     }));
@@ -719,46 +724,84 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
         });
     }
     {
-        // HTTP basic auth: answer from the saved logins when they are
-        // open and know the host; otherwise WebKit's own dialog asks.
+        // HTTP basic auth: answer from the saved logins when they know
+        // the host; otherwise WebKit's own dialog asks.
         let s = shared.clone();
         view.connect_authenticate(move |_, request| {
-            if private || request.is_for_proxy() { return false; }
             let host = request.host().map(|h| h.to_string()).unwrap_or_default();
-            let login = {
-                let a = s.borrow();
-                if request.is_retry() || !a.store.unlocked() { None } else {
-                    a.store.for_site(&format!("https://{}", host)).first().map(|l| (*l).clone())
-                        .or_else(|| a.store.for_site(&format!("http://{}", host)).first().map(|l| (*l).clone()))
-                }
-            };
-            match login {
-                Some(l) => {
+            // A private tab and a proxy get no saved login, and no offer
+            // to save the one typed.
+            let plain = private || request.is_for_proxy();
+            if !plain && !request.is_retry() {
+                let typed = s.borrow_mut().typed.remove(&id);
+                let (login, locked) = {
+                    let a = s.borrow();
+                    let free = a.tabs.current().map(|t| t.id) == Some(id) && !matches!(a.mode, Mode::Command | Mode::Prompt);
+                    (login_for_host(&a, &host), !typed && free && !a.store.unlocked() && a.store.exists())
+                };
+                if let Some(l) = login {
                     request.authenticate(Some(&Credential::new(&l.username, &l.password, CredentialPersistence::ForSession)));
-                    true
+                    return true;
                 }
-                None => {
-                    // What you type into WebKit's dialog never passes the
-                    // page script, so the offer to save it starts here,
-                    // once the site has let the login in.
-                    let origin = request.security_origin().map(|o| o.to_str().to_string())
-                        .filter(|o| o.contains("://")).unwrap_or_else(|| format!("https://{}", host));
-                    let s = s.clone();
-                    request.connect_authenticated(move |_, credential| {
-                        let mut c = credential.clone();
-                        offer_save(&s, Login {
-                            origin: origin.clone(),
-                            username: c.username().map(|u| u.to_string()).unwrap_or_default(),
-                            password: c.password().map(|p| p.to_string()).unwrap_or_default(),
-                            used: 0,
-                        });
-                    });
-                    false
+                if locked {
+                    // The locked store may know this login. The request
+                    // waits for the master password; after_unlock answers it.
+                    begin_ask(&s, Ask::Master(Then::Answer(id, request.clone())), "");
+                    return true;
                 }
             }
+            // WebKit's own dialog from here. on_key lets the keys through
+            // to it for as long as the request is noted here.
+            s.borrow_mut().login_boxes.insert(id, request.clone());
+            let gone = {
+                let s = s.clone();
+                move |r: &AuthenticationRequest| {
+                    let mut a = s.borrow_mut();
+                    if a.login_boxes.get(&id) == Some(r) { a.login_boxes.remove(&id); }
+                }
+            };
+            request.connect_cancelled(gone.clone());
+            // What you type into the dialog never passes the page script,
+            // so the offer to save it starts here, once the site has let
+            // the login in.
+            let origin = request.security_origin().map(|o| o.to_str().to_string())
+                .filter(|o| o.contains("://")).unwrap_or_else(|| format!("https://{}", host));
+            let s = s.clone();
+            request.connect_authenticated(move |r, credential| {
+                gone(r);
+                if plain { return; }
+                let mut c = credential.clone();
+                offer_save(&s, Login {
+                    origin: origin.clone(),
+                    username: c.username().map(|u| u.to_string()).unwrap_or_default(),
+                    password: c.password().map(|p| p.to_string()).unwrap_or_default(),
+                    used: 0,
+                });
+            });
+            false
         });
     }
     view
+}
+
+/// The saved login for the host of a site's own login box, https first.
+fn login_for_host(a: &App, host: &str) -> Option<Login> {
+    a.store.for_site(&format!("https://{}", host)).first().map(|l| (*l).clone())
+        .or_else(|| a.store.for_site(&format!("http://{}", host)).first().map(|l| (*l).clone()))
+}
+
+/// Give a login box that gaze held back to WebKit, to be typed in. WebKit
+/// shows its dialog only when it meets the request, so the page loads once
+/// more; `typed` keeps a locked store from holding that one back as well.
+fn hand_back(shared: &Shared, id: u64, request: &AuthenticationRequest) {
+    let view = {
+        let mut a = shared.borrow_mut();
+        a.typed.insert(id);
+        a.views.get(&id).cloned()
+    };
+    let uri = view.as_ref().and_then(|v| v.uri());
+    request.cancel();
+    if let (Some(v), Some(uri)) = (view, uri) { v.load_uri(&uri); }
 }
 
 fn attach(shared: &Shared, id: u64, view: WebView) {
@@ -1302,6 +1345,8 @@ fn close_tab(shared: &Shared, idx: usize) {
         if a.closed.len() > 50 { a.closed.remove(0); }
         if tab.private && !a.tabs.tabs.iter().any(|t| t.private) { a.private_session = None; }
         a.fill_at.remove(&tab.id);
+        a.login_boxes.remove(&tab.id);
+        a.typed.remove(&tab.id);
         (a.views.remove(&tab.id), a.cfg.home.clone())
     };
     if let Some(v) = view {
@@ -1422,12 +1467,30 @@ fn on_key(shared: &Shared, key: gdk::Key, state: gdk::ModifierType) -> glib::Pro
         let focused = current_view(&shared.borrow()).map(|v| v.has_focus()).unwrap_or(false);
         eprintln!("gaze: key {:?} in {:?}, view focused: {}", key.name(), mode, focused);
     }
+    if matches!(mode, Mode::Normal | Mode::Insert) {
+        let boxed = {
+            let a = shared.borrow();
+            a.tabs.current().and_then(|t| a.login_boxes.get(&t.id).cloned())
+        };
+        // WebKit's own login box is up in this tab. The keys are for it,
+        // Tab and Enter too; Escape closes it.
+        if let Some(request) = boxed {
+            if key != gdk::Key::Escape { return Proceed; }
+            request.cancel();
+            return Stop;
+        }
+    }
     let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
     let ch = key.to_unicode();
     match mode {
         Mode::Command => {
             match key {
-                gdk::Key::Escape => { end_ask(shared); Stop }
+                gdk::Key::Escape => {
+                    let ask = shared.borrow().ask.clone();
+                    end_ask(shared);
+                    if let Ask::Master(Then::Answer(id, request)) = ask { hand_back(shared, id, &request); }
+                    Stop
+                }
                 gdk::Key::Tab | gdk::Key::Down => { complete_move(shared, 1); Stop }
                 gdk::Key::ISO_Left_Tab | gdk::Key::Up => { complete_move(shared, -1); Stop }
                 _ => Proceed,
@@ -1604,6 +1667,7 @@ fn begin_ask(shared: &Shared, ask: Ask, prefill: &str) {
             Ask::Command => ":",
             Ask::Find => "/",
             Ask::GroupName => "group name:",
+            Ask::Master(Then::Answer(..)) => "master password, to answer this site's login:",
             Ask::Master(_) => if a.store.exists() { "master password:" } else { "new master password (blank for none):" },
             Ask::NewMaster => "new master password (blank for none):",
             Ask::Again(_) => "the same once more:",
@@ -1665,7 +1729,10 @@ fn entry_done(shared: &Shared) {
                     set_message(shared, &format!("Passwords unlocked ({} saved)", n));
                     after_unlock(shared, then);
                 }
-                Err(e) => set_message(shared, &format!("Passwords: {}", e)),
+                Err(e) => {
+                    set_message(shared, &format!("Passwords: {}", e));
+                    if let Then::Answer(id, request) = then { hand_back(shared, id, &request); }
+                }
             }
         }
     }
@@ -2067,6 +2134,14 @@ fn after_unlock(shared: &Shared, then: Then) {
                 Ok(Change::Updated) => set_message(shared, &format!("Updated the password of {} for {}", user, site)),
                 Ok(Change::Same) => set_message(shared, "Already saved"),
                 Err(e) => set_message(shared, &format!("Passwords: {}", e)),
+            }
+        }
+        Then::Answer(id, request) => {
+            let host = request.host().map(|h| h.to_string()).unwrap_or_default();
+            let login = login_for_host(&shared.borrow(), &host);
+            match login {
+                Some(l) => request.authenticate(Some(&Credential::new(&l.username, &l.password, CredentialPersistence::ForSession))),
+                None => hand_back(shared, id, &request),
             }
         }
         Then::Import(path) => {
@@ -2495,7 +2570,9 @@ bookmarks (★) first. Visits are kept in <code>~/.gaze/history</code>, the last
 </div><div><h2>Passwords</h2>
 <p>Logins live in <code>~/.gaze/sync/passwords</code>, sealed with a master password you choose the first time.
 A login form is filled when the page loads; after a sign-in with a new or changed password gaze asks whether to save it.
-A site's HTTP password dialog is answered from the store too, when it is open; a login you type into it gets the same question.</p>
+A site's HTTP password dialog is answered from the store too, after the master password if it is locked.
+<kbd>Esc</kbd> at that prompt gives you the dialog instead. Keys go straight into the dialog and <kbd>Esc</kbd> closes it;
+a login typed there gets the same question.</p>
 <h2>Ad blocking</h2>
 <p>On by default (<code>adblock: false</code> in config.yml turns it off). The first start fetches Steven Black's hosts list
 to <code>~/.gaze/adblock/hosts</code> and compiles it into a WebKit content filter; every domain on the list is blocked.
