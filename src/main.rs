@@ -1744,8 +1744,15 @@ fn render_completion(shared: &Shared) {
     }
 }
 
-/// Tab and Shift-Tab walk the offers and put one on the command line. A
-/// command picked this way ends in a space, and its arguments are offered next.
+/// The line a picked offer puts on the command line. A lone command keeps
+/// its space, and its arguments are offered next. Among several the space
+/// stays out: with it the list would give way to arguments, and Tab could
+/// not walk on to the next command.
+fn picked(line: &str, among: usize) -> String {
+    if among > 1 { line.trim_end().to_string() } else { line.to_string() }
+}
+
+/// Tab and Shift-Tab walk the offers and put one on the command line.
 fn complete_move(shared: &Shared, dir: i32) {
     let (entry, text) = {
         let mut a = shared.borrow_mut();
@@ -1758,7 +1765,7 @@ fn complete_move(shared: &Shared, dir: i32) {
         };
         a.selected = Some(next);
         a.setting_text = true;
-        (a.ui.entry.clone(), a.offers[next].line.clone())
+        (a.ui.entry.clone(), picked(&a.offers[next].line, n))
     };
     entry.set_text(&text);
     entry.set_position(-1);
@@ -2457,7 +2464,7 @@ When the last one closes, the cookies and the cache go with it. No login is fill
 <kbd>gp</kbd>. A download, a bookmark, and a dark or microphone choice for a site are still kept.
 The site and the network still see your address.</p>
 <h2>Command line</h2>
-<p><kbd>Tab</kbd> and <kbd>Shift-Tab</kbd> walk what the line offers and put it there. Before the first space that is
+<p><kbd>Tab</kbd> and <kbd>Shift-Tab</kbd> walk what the line offers and put it there, one step a press. Before the first space that is
 the commands; after <code>group</code> and its kin it is the group names, after <code>group-color</code> the colours.
 <kbd>o</kbd> lists the pages you were at last; typing narrows the list to pages whose URL or title holds every word,
 bookmarks (★) first. Visits are kept in <code>~/.gaze/history</code>, the last five thousand pages.</p>
@@ -2480,7 +2487,15 @@ to <code>~/.gaze/adblock/hosts</code> and compiles it into a WebKit content filt
 
 #[cfg(test)]
 mod tests {
-    use super::saved;
+    use super::{picked, saved};
+
+    #[test]
+    fn tab_walks_on_among_several_commands() {
+        // A space at the end swaps the list for the command's arguments.
+        assert_eq!(picked("passwords ", 5), "passwords");
+        assert_eq!(picked("help ", 1), "help ", "a lone command goes on to its arguments");
+        assert_eq!(picked("group Work", 3), "group Work");
+    }
 
     #[test]
     fn the_editor_s_last_newline_stays_out_of_a_field_that_had_none() {
