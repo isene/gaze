@@ -127,19 +127,143 @@ pub const PAGE: &str = r#"
       return 'none';
     },
 
+    // ---- reader view: the article alone ----
+    reader() {
+      const on = document.querySelector('gaze-reader');
+      if (on) {
+        on.remove();
+        if (this.readerSheet) document.adoptedStyleSheets = document.adoptedStyleSheets.filter(s => s !== this.readerSheet);
+        this.readerSheet = null;
+        scrollTo(0, this.readerY || 0);
+        return 'off';
+      }
+      // An article's text sits in paragraphs that share a parent. Each
+      // long paragraph counts for its parent, and half for the one above.
+      const score = new Map();
+      for (const p of document.querySelectorAll('p')) {
+        const n = (p.innerText || '').trim().length;
+        if (n < 60 || !visible(p)) continue;
+        const up = p.parentElement, upper = up && up.parentElement;
+        if (up) score.set(up, (score.get(up) || 0) + n);
+        if (upper && upper !== document.documentElement) score.set(upper, (score.get(upper) || 0) + n / 2);
+      }
+      let best = null, most = 0;
+      for (const [el, n] of score) if (n > most) { best = el; most = n; }
+      if (!best || most < 250) return 'none';
+      best = best.closest('[itemprop=articleBody], article') || best;
+
+      const DROP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'FORM', 'NAV', 'ASIDE', 'FOOTER', 'BUTTON', 'INPUT', 'SELECT',
+        'TEXTAREA', 'SVG', 'CANVAS', 'VIDEO', 'AUDIO', 'OBJECT', 'EMBED', 'DIALOG', 'MENU', 'LINK', 'META', 'TEMPLATE']);
+      const KEEP = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'PRE', 'CODE', 'EM', 'STRONG',
+        'B', 'I', 'U', 'S', 'A', 'FIGURE', 'FIGCAPTION', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TD', 'TH', 'CAPTION', 'BR', 'HR',
+        'SUP', 'SUB', 'DL', 'DT', 'DD', 'SPAN', 'DIV', 'SMALL', 'MARK', 'ABBR', 'CITE', 'Q', 'DEL', 'INS', 'KBD', 'VAR', 'SAMP', 'TIME']);
+      const ROLE = /^(navigation|complementary|dialog|search|contentinfo|banner|toolbar|menu|menubar)$/;
+      // What a site calls the boxes that are not the article.
+      const SIDE = /(^|[\s_-])(share|sharing|social|related|promo|advert|ads?|newsletter|sidebar|breadcrumbs?|editsection|noprint|cookie|popup|modal|subscribe)($|[\s_-])/i;
+      const copy = (src, top) => {
+        if (src.nodeType === 3) return document.createTextNode(src.data);
+        if (src.nodeType !== 1) return null;
+        const tag = src.tagName.toUpperCase();
+        if (DROP.has(tag) || src.getAttribute('aria-hidden') === 'true' || ROLE.test(src.getAttribute('role') || '')) return null;
+        if (!top && SIDE.test(typeof src.className === 'string' ? src.className : '')) return null;
+        const cs = getComputedStyle(src);
+        if (cs.display === 'none' || cs.visibility === 'hidden') return null;
+        if (tag === 'MATH') return src.cloneNode(true);
+        if (tag === 'IMG') {
+          const url = src.currentSrc || src.src || src.dataset.src || '';
+          const box = src.getBoundingClientRect();
+          // A dot that counts readers, or an icon.
+          if (!url || (box.width > 0 && box.width < 24 && box.height < 24)) return null;
+          const img = document.createElement('img');
+          img.src = url;
+          img.alt = src.alt || '';
+          if (box.width >= 200) img.className = 'big';
+          return img;
+        }
+        const out = document.createElement(KEEP.has(tag) ? tag : (cs.display.startsWith('inline') ? 'span' : 'div'));
+        if (tag === 'A') {
+          // The mark beside a heading that links to the heading itself.
+          if (/^[#¶§]$/.test(src.textContent.trim())) return null;
+          if (src.href) out.href = src.href;
+        }
+        if (tag === 'TD' || tag === 'TH') {
+          if (src.colSpan > 1) out.colSpan = src.colSpan;
+          if (src.rowSpan > 1) out.rowSpan = src.rowSpan;
+        }
+        for (const c of src.childNodes) { const k = copy(c, false); if (k) out.appendChild(k); }
+        // An empty box is what is left of something dropped.
+        if (!out.firstChild && !['BR', 'HR', 'TD', 'TH'].includes(tag)) return null;
+        return out;
+      };
+      const page = document.createElement('div');
+      page.className = 'page';
+      const body = copy(best, true);
+      if (!body) return 'none';
+      if (!body.querySelector('h1')) {
+        const h = document.createElement('h1'), own = document.querySelector('h1');
+        h.textContent = (own && own.innerText.trim()) || document.title;
+        page.appendChild(h);
+      }
+      page.appendChild(body);
+
+      // A page gaze has turned dark is painted light here, and the turn
+      // makes it dark; its pictures are turned back as on any such page.
+      const turned = !!document.getElementById('__gaze_dark');
+      const dark = !turned && matchMedia('(prefers-color-scheme: dark)').matches;
+      const c = dark ? { bg: '#1c1c1c', fg: '#d6d6d0', soft: '#9a9a94', line: '#3a3a3a', box: '#262626', link: '#8ab4f8' }
+                     : { bg: '#fbfaf6', fg: '#1d1d1b', soft: '#66665f', line: '#d9d7cf', box: '#f0eee6', link: '#0b57d0' };
+      // Paper is white whatever the screen is.
+      const paper = { bg: '#fff', fg: '#000', soft: '#555', line: '#bbb', box: '#f3f3f3', link: '#0b57d0' };
+      const set = p => '--bg:' + p.bg + ';--fg:' + p.fg + ';--soft:' + p.soft + ';--line:' + p.line + ';--box:' + p.box + ';--link:' + p.link + ';';
+      const inside =
+        ':host{all:initial;' + set(c) + 'display:block;min-height:100vh;background:var(--bg);color:var(--fg);font:19px/1.6 Georgia,serif}' +
+        '@media print{:host{' + set(paper) + 'min-height:0;font-size:12pt}.page{max-width:none!important;padding:0!important}}' +
+        '.page{max-width:42em;margin:0 auto;padding:2.5em 1.2em 6em}' +
+        'h1{font-size:1.7em;line-height:1.25;margin:0 0 1em}h2{font-size:1.35em;margin:1.8em 0 .5em}h3,h4,h5,h6{font-size:1.1em;margin:1.5em 0 .4em}' +
+        'p{margin:0 0 1em}a{color:var(--link)}img{max-width:100%;height:auto;vertical-align:middle}img.big{display:block;margin:1em auto}' +
+        'pre{overflow-x:auto;background:var(--box);padding:.8em 1em;font-size:.85em;line-height:1.4}code,kbd,samp{font-family:monospace;font-size:.9em}' +
+        'blockquote{margin:1em 0;padding-left:1em;border-left:3px solid var(--line);color:var(--soft)}' +
+        'figure{margin:1.5em 0}figcaption,small{font-size:.85em;color:var(--soft)}' +
+        'table{border-collapse:collapse;margin:1em 0;font-size:.9em}td,th{border:1px solid var(--line);padding:.3em .6em;vertical-align:top}' +
+        'hr{border:0;border-top:1px solid var(--line);margin:2em 0}' +
+        (turned ? '@media screen{img{filter:invert(1) hue-rotate(180deg)}}' : '');
+      const outside =
+        'body>:not(gaze-reader){display:none!important}' +
+        'html,body{margin:0!important;padding:0!important;height:auto!important;min-height:0!important;width:auto!important;' +
+        'max-width:none!important;overflow:visible!important;position:static!important;display:block!important;' +
+        'transform:none!important;background:' + c.bg + '!important}' +
+        '@media print{html,body{background:#fff!important}}';
+      // Style sheets made here, not style elements: a site may forbid
+      // the elements, and the reader has to look the same everywhere.
+      const sheet = css => { const s = new CSSStyleSheet(); s.replaceSync(css); return s; };
+      const host = document.createElement('gaze-reader');
+      const shadow = host.attachShadow({ mode: 'open' });
+      shadow.adoptedStyleSheets = [sheet(inside)];
+      shadow.appendChild(page);
+      this.readerY = scrollY;
+      this.readerSheet = sheet(outside);
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, this.readerSheet];
+      document.body.appendChild(host);
+      scrollTo(0, 0);
+      return 'on';
+    },
+
     // ---- hints ----
     hints: [], typed: '', newTab: false,
     clickable() {
       const sel = 'a[href], button, input:not([type=hidden]), select, textarea, summary, [role=button], [role=link], [role=menuitem], [role=tab], [role=checkbox], [role=option], [onclick], [tabindex]:not([tabindex="-1"]), label, video, audio, [contenteditable]';
       const out = [], vw = innerWidth, vh = innerHeight;
-      for (const el of document.querySelectorAll(sel)) {
+      // The reader view keeps its text in a tree of its own.
+      const reader = document.querySelector('gaze-reader');
+      const roots = reader && reader.shadowRoot ? [document, reader.shadowRoot] : [document];
+      for (const root of roots) for (const el of root.querySelectorAll(sel)) {
         const r = el.getBoundingClientRect();
         if (r.width < 2 || r.height < 2 || r.bottom < 0 || r.right < 0 || r.top > vh || r.left > vw) continue;
         const cs = getComputedStyle(el);
         if (cs.visibility === 'hidden' || cs.display === 'none' || cs.opacity === '0') continue;
         const x = Math.min(vw - 1, Math.max(0, r.left + Math.min(r.width / 2, 8)));
         const y = Math.min(vh - 1, Math.max(0, r.top + Math.min(r.height / 2, 8)));
-        const top = document.elementFromPoint(x, y);
+        const top = root.elementFromPoint(x, y);
         if (top && top !== el && !el.contains(top) && !top.contains(el)) continue;
         out.push({ el, r });
       }
@@ -271,12 +395,14 @@ pub const DARK: &str = r#"
   const TURN = '{filter:invert(1) hue-rotate(180deg)}';
   const MEDIA = 'img,video,canvas,embed,object,iframe';
   const each = (pre, post) => MEDIA.split(',').map(t => pre + t + post).join(',');
-  const CSS =
+  // For the screen alone. On paper and in a saved PDF a turned page came
+  // out as black sheets with no text in them.
+  const CSS = '@media screen{' +
     'html{filter:invert(1) hue-rotate(180deg);background:#fff}' +
     MEDIA + ',[' + P + '],[' + G + ']' + TURN +
     '[' + G + ']>*' + TURN +
     each('[' + G + ']>', '') + '{filter:none}' +
-    each('[' + P + '] ', '') + '{filter:none}';
+    each('[' + P + '] ', '') + '{filter:none}' + '}';
   const colour = el => {
     if (!el) return null;
     const m = getComputedStyle(el).backgroundColor.match(/[\d.]+/g);
@@ -335,6 +461,12 @@ pub const DARK: &str = r#"
     };
     walk(root);
   };
+  const unadopt = () => {
+    const made = window.__gazeDarkSheet;
+    if (!made) return;
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter(x => x !== made);
+    window.__gazeDarkSheet = null;
+  };
   const apply = () => {
     if (!document.body) return;
     const on = light();
@@ -344,6 +476,7 @@ pub const DARK: &str = r#"
     if (!on) {
       if (sheet) {
         sheet.remove();
+        unadopt();
         document.querySelectorAll('[' + P + '],[' + G + ']').forEach(e => {
           e.removeAttribute(P); e.removeAttribute(G);
         });
@@ -355,6 +488,14 @@ pub const DARK: &str = r#"
       s.id = '__gaze_dark';
       s.textContent = CSS;
       (document.head || document.documentElement).appendChild(s);
+      // A site may forbid style elements, and the page then stays light.
+      // A sheet made here is allowed everywhere.
+      if (!s.sheet && !window.__gazeDarkSheet) {
+        const made = new CSSStyleSheet();
+        made.replaceSync(CSS);
+        window.__gazeDarkSheet = made;
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, made];
+      }
     }
     photos(document.body);
   };
@@ -366,4 +507,7 @@ pub const DARK: &str = r#"
 "#;
 
 /// Take the dark stylesheet off a page again.
-pub const UNDARK: &str = "{ const s = document.getElementById('__gaze_dark'); if (s) s.remove(); document.querySelectorAll('[data-gaze-photo],[data-gaze-backdrop]').forEach(e => { e.removeAttribute('data-gaze-photo'); e.removeAttribute('data-gaze-backdrop'); }); }";
+pub const UNDARK: &str = "{ const s = document.getElementById('__gaze_dark'); if (s) s.remove(); \
+    const made = window.__gazeDarkSheet; \
+    if (made) { document.adoptedStyleSheets = document.adoptedStyleSheets.filter(x => x !== made); window.__gazeDarkSheet = null; } \
+    document.querySelectorAll('[data-gaze-photo],[data-gaze-backdrop]').forEach(e => { e.removeAttribute('data-gaze-photo'); e.removeAttribute('data-gaze-backdrop'); }); }";

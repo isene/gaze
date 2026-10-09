@@ -1,6 +1,7 @@
 //! `~/.gaze/config.yml`, and turning what you type into a URI.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -10,6 +11,12 @@ pub struct Config {
     pub home: String,
     /// Search URL; `%s` is what you typed.
     pub search: String,
+    /// Paper for a print and a saved PDF: a4, letter, legal, a3, a5.
+    /// Empty follows the system.
+    pub paper: String,
+    /// More search engines, by keyword: `w rust` searches the one named
+    /// `w` for rust. `%s` is what follows the keyword.
+    pub engines: BTreeMap<String, String>,
     /// Where downloads land.
     pub downloads: String,
     /// Page zoom, 1.0 is 100%.
@@ -53,6 +60,12 @@ impl Default for Config {
         Config {
             home: "https://duckduckgo.com".into(),
             search: "https://duckduckgo.com/?q=%s".into(),
+            engines: [
+                ("w", "https://en.wikipedia.org/wiki/Special:Search?search=%s"),
+                ("yt", "https://www.youtube.com/results?search_query=%s"),
+                ("gh", "https://github.com/search?q=%s"),
+            ].iter().map(|(k, u)| (k.to_string(), u.to_string())).collect(),
+            paper: String::new(),
             downloads: "~/Downloads".into(),
             zoom: 1.0,
             scroll_step: 80,
@@ -74,7 +87,17 @@ const TEMPLATE: &str = "\
 # gaze configuration
 home: https://duckduckgo.com
 search: https://duckduckgo.com/?q=%s
+# More search engines, by keyword: \"w rust\" searches Wikipedia for rust.
+# The keyword is the first word you type, %s is the rest. Leave these three
+# out and they are there all the same; engines: {} turns them off.
+engines:
+  w: https://en.wikipedia.org/wiki/Special:Search?search=%s
+  yt: https://www.youtube.com/results?search_query=%s
+  gh: https://github.com/search?q=%s
 downloads: ~/Downloads
+# Paper for a print and a saved PDF: a4, letter, legal, a3 or a5. Left
+# out, it follows the language settings of your system.
+# paper: a4
 zoom: 1.0
 scroll_step: 80
 adblock: true
@@ -105,6 +128,11 @@ mail: kastrup --draft
 # groups:
 #   - {name: Work, color: '#5faf87'}
 ";
+
+impl Config {
+    /// What you typed, as the address to load.
+    pub fn to_uri(&self, input: &str) -> String { to_uri(input, &self.search, &self.engines) }
+}
 
 pub fn home_dir() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
@@ -202,9 +230,16 @@ pub fn save_dark(on: bool) {
 
 /// What you typed in the open prompt, as a URI: a URL as it is, a host
 /// with https in front, a path as a file, anything else as a search.
-pub fn to_uri(input: &str, search: &str) -> String {
+pub fn to_uri(input: &str, search: &str, engines: &BTreeMap<String, String>) -> String {
     let s = input.trim();
     if s.is_empty() { return "about:blank".into(); }
+    // A keyword in front picks another search engine. Alone it is a word
+    // like any other.
+    if let Some((key, rest)) = s.split_once(char::is_whitespace) {
+        if let Some(engine) = engines.get(key) {
+            return engine.replace("%s", &form_encode(rest.trim()));
+        }
+    }
     if s.contains("://") || s.starts_with("about:") || s.starts_with("gaze:") || s.starts_with("data:") || s.starts_with("mailto:") {
         return s.to_string();
     }
@@ -244,17 +279,48 @@ mod tests {
     use super::*;
     const S: &str = "https://ddg.gg/?q=%s";
 
+    fn plain(input: &str, search: &str) -> String { to_uri(input, search, &BTreeMap::new()) }
+
     #[test]
     fn typed_text_becomes_a_url_a_file_or_a_search() {
-        assert_eq!(to_uri("https://isene.org/x", S), "https://isene.org/x");
-        assert_eq!(to_uri("isene.org", S), "https://isene.org");
-        assert_eq!(to_uri("isene.org/about?x=1", S), "https://isene.org/about?x=1");
-        assert_eq!(to_uri("localhost:8080/a", S), "http://localhost:8080/a");
-        assert_eq!(to_uri("/tmp/x.html", S), "file:///tmp/x.html");
-        assert_eq!(to_uri("free will", S), "https://ddg.gg/?q=free+will");
-        assert_eq!(to_uri("what is 2.5", S), "https://ddg.gg/?q=what+is+2.5");
-        assert_eq!(to_uri("æøå", S), "https://ddg.gg/?q=%C3%A6%C3%B8%C3%A5");
-        assert_eq!(to_uri("v0.3", S), "https://ddg.gg/?q=v0.3");
-        assert_eq!(to_uri("", S), "about:blank");
+        assert_eq!(plain("https://isene.org/x", S), "https://isene.org/x");
+        assert_eq!(plain("isene.org", S), "https://isene.org");
+        assert_eq!(plain("isene.org/about?x=1", S), "https://isene.org/about?x=1");
+        assert_eq!(plain("localhost:8080/a", S), "http://localhost:8080/a");
+        assert_eq!(plain("/tmp/x.html", S), "file:///tmp/x.html");
+        assert_eq!(plain("free will", S), "https://ddg.gg/?q=free+will");
+        assert_eq!(plain("what is 2.5", S), "https://ddg.gg/?q=what+is+2.5");
+        assert_eq!(plain("æøå", S), "https://ddg.gg/?q=%C3%A6%C3%B8%C3%A5");
+        assert_eq!(plain("v0.3", S), "https://ddg.gg/?q=v0.3");
+        assert_eq!(plain("", S), "about:blank");
+    }
+
+    #[test]
+    fn a_keyword_in_front_picks_the_search_engine() {
+        let cfg = Config { search: S.into(), ..Config::default() };
+        assert_eq!(cfg.to_uri("w free will"), "https://en.wikipedia.org/wiki/Special:Search?search=free+will");
+        assert_eq!(cfg.to_uri("  gh   crust tui "), "https://github.com/search?q=crust+tui");
+        assert_eq!(cfg.to_uri("yt æ&ø"), "https://www.youtube.com/results?search_query=%C3%A6%26%C3%B8");
+        // Alone, or as part of a word, a keyword is a word like any other.
+        assert_eq!(cfg.to_uri("w"), "https://ddg.gg/?q=w");
+        assert_eq!(cfg.to_uri("what is w"), "https://ddg.gg/?q=what+is+w");
+        assert_eq!(cfg.to_uri("W rust"), "https://ddg.gg/?q=W+rust");
+        // An address stays an address, and the list can be emptied.
+        assert_eq!(cfg.to_uri("isene.org"), "https://isene.org");
+        let none = Config { search: S.into(), engines: BTreeMap::new(), ..Config::default() };
+        assert_eq!(none.to_uri("w free will"), "https://ddg.gg/?q=w+free+will");
+    }
+
+    #[test]
+    fn an_older_config_gets_the_engines_and_can_turn_them_off() {
+        let old: Config = serde_yaml::from_str("search: https://ddg.gg/?q=%s\n").unwrap();
+        assert_eq!(old.engines.len(), 3);
+        let off: Config = serde_yaml::from_str("engines: {}\n").unwrap();
+        assert!(off.engines.is_empty());
+        let own: Config = serde_yaml::from_str("engines:\n  osm: https://www.openstreetmap.org/search?query=%s\n").unwrap();
+        assert_eq!(own.to_uri("osm oslo"), "https://www.openstreetmap.org/search?query=oslo");
+        assert_eq!(own.engines.len(), 1, "your own list replaces the three");
+        let made: Config = serde_yaml::from_str(TEMPLATE).unwrap();
+        assert_eq!(made.engines, Config::default().engines, "the file gaze writes says what the defaults are");
     }
 }

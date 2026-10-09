@@ -28,6 +28,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("i", "insert"), ("gi", "focus-input"),
     ("yy", "yank url"), ("yt", "yank title"), ("pp", "paste"), ("PP", "paste-tab"),
     ("+", "zoom-in"), ("-", "zoom-out"), ("=", "zoom-reset"), ("D", "dark"),
+    ("gr", "reader"), ("<Ctrl-p>", "print"), ("<Ctrl-P>", "pdf"), ("<Alt-m>", "mute"),
     ("J", "tab-next"), ("K", "tab-prev"), ("<Right>", "tab-next"), ("<Left>", "tab-prev"),
     ("<Shift-Right>", "tab-move +1"), ("<Shift-Left>", "tab-move -1"),
     ("g0", "tab-first"), ("g$", "tab-last"),

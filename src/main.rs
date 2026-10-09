@@ -195,7 +195,7 @@ fn main() {
         app.activate();
         for arg in args {
             with_app(|s| {
-                let uri = config::to_uri(&arg, &s.borrow().cfg.search);
+                let uri = s.borrow().cfg.to_uri(&arg);
                 open_tab(s, &uri, false);
             });
         }
@@ -612,6 +612,19 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
     {
         let s = shared.clone();
         view.connect_estimated_load_progress_notify(move |_| refresh(&s));
+    }
+    {
+        // A tab that plays sound says so in the tab bar. WebKit tells when
+        // the sound starts and stops, so nothing is asked on a timer.
+        let s = shared.clone();
+        view.connect_is_playing_audio_notify(move |v| {
+            {
+                let mut a = s.borrow_mut();
+                if let Some(i) = a.tabs.index_of(id) { a.tabs.tabs[i].audio = v.is_playing_audio(); }
+            }
+            debug(if v.is_playing_audio() { "a tab plays sound" } else { "a tab went quiet" });
+            refresh(&s);
+        });
     }
     {
         let s = shared.clone();
@@ -1132,7 +1145,7 @@ fn tabbar_markup(tabs: &Tabs) -> String {
         if n > 1 && i > first_shown { out.push_str("<span foreground=\"#5c5c5c\"> │</span>"); }
         let raw = if t.title.is_empty() { t.uri.trim_start_matches("https://").trim_start_matches("http://").to_string() } else { t.title.clone() };
         let short: String = raw.chars().take(20).collect();
-        let text = format!("{}{}", if t.private { PRIVATE_MARK } else { "" }, glib::markup_escape_text(short.trim()));
+        let text = format!("{}{}{}", if t.private { PRIVATE_MARK } else { "" }, sound_mark(t), glib::markup_escape_text(short.trim()));
         let color = group.map(|g| tabs::color_hex(&g.color)).unwrap_or_else(|| (if t.pending { "#7a7a7a" } else { "#c8c8c8" }).to_string());
         if i == tabs.active {
             // The current tab: a light pill, its text in the group's colour.
@@ -1148,7 +1161,150 @@ fn tabbar_markup(tabs: &Tabs) -> String {
     out
 }
 
+/// Stands before the title of a tab that plays sound, and of one whose
+/// sound is switched off.
+fn sound_mark(t: &tabs::Tab) -> &'static str {
+    if t.muted { "♪✕ " } else if t.audio { "♪ " } else { "" }
+}
+
+/// Sound off or on for a tab: this one, or the n-th in the tab bar.
+fn mute(shared: &Shared, arg: &str) {
+    let found = {
+        let a = shared.borrow();
+        let idx = if arg.is_empty() { Some(a.tabs.active) }
+            else { arg.parse::<usize>().ok().and_then(|n| a.tabs.visible_indices().get(n.wrapping_sub(1)).copied()) };
+        idx.and_then(|i| a.tabs.tabs.get(i)).map(|t| (t.id, a.views.get(&t.id).cloned()))
+    };
+    let Some((id, view)) = found else { set_message(shared, "mute [tab number]"); return };
+    let Some(view) = view else { set_message(shared, "That tab is not loaded yet"); return };
+    let muted = !view.is_muted();
+    view.set_is_muted(muted);
+    {
+        let mut a = shared.borrow_mut();
+        if let Some(i) = a.tabs.index_of(id) { a.tabs.tabs[i].muted = muted; }
+    }
+    set_message(shared, if muted { "Sound off for the tab" } else { "Sound on for the tab" });
+}
+
+/// The article alone, and back to the page.
+fn reader(shared: &Shared) {
+    let Some(view) = current_view(&shared.borrow()) else { return };
+    let s = shared.clone();
+    run_js_then(&view, "window.__gaze ? window.__gaze.reader() : 'none'", move |v| {
+        let r = v.map(|v| v.to_str().to_string()).unwrap_or_default();
+        set_message(&s, match r.as_str() {
+            "on" => "Reader view: the same key goes back to the page",
+            "off" => "Back to the page",
+            _ => "No article found on this page",
+        });
+    });
+}
+
+/// The print dialog for the page on screen.
+fn print_page(shared: &Shared) {
+    let (view, window, setup) = { let a = shared.borrow(); (current_view(&a), a.ui.window.clone(), page_setup(&a.cfg.paper)) };
+    let Some(view) = view else { return };
+    let op = webkit6::PrintOperation::new(&view);
+    if let Some(setup) = setup { op.set_page_setup(&setup); }
+    op.connect_failed(|_, err| {
+        let text = err.to_string();
+        with_app(|s| set_message(s, &format!("Print failed: {}", text)));
+    });
+    op.run_dialog(Some(&window));
+}
+
+/// GTK's name for the paper in the config; None leaves it to the system.
+fn paper_name(paper: &str) -> Option<String> {
+    let p = paper.trim().to_lowercase();
+    match p.as_str() {
+        "" => None,
+        "a3" | "a4" | "a5" | "b5" => Some(format!("iso_{}", p)),
+        "letter" | "legal" | "executive" => Some(format!("na_{}", p)),
+        _ => Some(p),
+    }
+}
+
+fn page_setup(paper: &str) -> Option<gtk::PageSetup> {
+    let setup = gtk::PageSetup::new();
+    setup.set_paper_size_and_default_margins(&gtk::PaperSize::new(Some(&paper_name(paper)?)));
+    Some(setup)
+}
+
+/// A file name for a page: its title, without what a file name cannot
+/// hold, or the site's name when the page has no title.
+fn pdf_name(title: &str, uri: &str) -> String {
+    let clean: String = title.chars()
+        .map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { ' ' } else { c })
+        .collect();
+    let mut name = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+    name = name.trim_matches('.').trim().chars().take(80).collect::<String>().trim().to_string();
+    if name.is_empty() {
+        let host = uri.split("://").nth(1).unwrap_or("").split(['/', '?', '#']).next().unwrap_or("");
+        name = if host.is_empty() { "page".to_string() } else { host.replace(':', "-") };
+    }
+    format!("{}.pdf", name)
+}
+
+/// `name` in `dir`, or `name-2`, `name-3` when that file is there already.
+fn free_path(dir: &std::path::Path, name: &str) -> PathBuf {
+    let (stem, ext) = name.rsplit_once('.').unwrap_or((name, ""));
+    let mut path = dir.join(name);
+    let mut n = 2;
+    while path.exists() {
+        path = dir.join(format!("{}-{}.{}", stem, n, ext));
+        n += 1;
+    }
+    path
+}
+
+/// Save the page as a PDF: to the named file, or under the page's title
+/// in the download folder.
+fn save_pdf(shared: &Shared, arg: &str) {
+    let (view, dir, title, uri, setup) = {
+        let a = shared.borrow();
+        let t = a.tabs.current();
+        (current_view(&a), config::expand(&a.cfg.downloads),
+         t.map(|t| t.title.clone()).unwrap_or_default(), t.map(|t| t.uri.clone()).unwrap_or_default(),
+         page_setup(&a.cfg.paper))
+    };
+    let Some(view) = view else { return };
+    let path = if arg.is_empty() {
+        free_path(&dir, &pdf_name(&title, &uri))
+    } else {
+        let p = config::expand(arg);
+        if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) { p } else { PathBuf::from(format!("{}.pdf", p.display())) }
+    };
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            set_message(shared, &format!("{}: {}", parent.display(), e));
+            return;
+        }
+    }
+    // GTK's own printer that writes a file. No dialog: the name is known.
+    let settings = gtk::PrintSettings::new();
+    settings.set_printer("Print to File");
+    settings.set(gtk::PRINT_SETTINGS_OUTPUT_FILE_FORMAT.as_str(), Some("pdf"));
+    settings.set(gtk::PRINT_SETTINGS_OUTPUT_URI.as_str(), Some(gio::File::for_path(&path).uri().as_str()));
+    let op = webkit6::PrintOperation::new(&view);
+    op.set_print_settings(&settings);
+    if let Some(setup) = setup { op.set_page_setup(&setup); }
+    let written = path.clone();
+    op.connect_finished(move |_| {
+        let text = if written.exists() { format!("Saved {}", written.display()) }
+            else { format!("Could not write {}", written.display()) };
+        with_app(|s| set_message(s, &text));
+    });
+    op.print();
+    set_message(shared, &format!("Saving {}", path.display()));
+}
+
+/// A line on stderr when GAZE_DEBUG is set. The hidden tests read it.
+fn debug(text: &str) {
+    if std::env::var_os("GAZE_DEBUG").is_some() { eprintln!("gaze: {}", text); }
+}
+
 fn set_message(shared: &Shared, text: &str) {
+    if !text.is_empty() { debug(&format!("says {}", text)); }
     shared.borrow_mut().message = text.to_string();
     refresh(shared);
 }
@@ -1605,7 +1761,7 @@ fn paste_and_open(shared: &Shared, new_tab: bool) {
     let s = shared.clone();
     clipboard().read_text_async(None::<&gio::Cancellable>, move |res| {
         let Ok(Some(text)) = res else { set_message(&s, "Clipboard is empty"); return };
-        let uri = config::to_uri(&text, &s.borrow().cfg.search);
+        let uri = s.borrow().cfg.to_uri(&text);
         open_or_play(&s, &uri, new_tab);
     });
 }
@@ -1869,28 +2025,28 @@ fn run_command(shared: &Shared, line: &str) {
     if line.trim().is_empty() { return; }
     let (cmd, rest) = line.split_once(' ').unwrap_or((line, ""));
     let (cmd, arg) = (cmd.trim(), rest.trim());
-    let (search, step, uri, title) = {
+    let (step, uri, title) = {
         let a = shared.borrow();
         let t = a.tabs.current();
-        (a.cfg.search.clone(), a.cfg.scroll_step as f64,
+        (a.cfg.scroll_step as f64,
          t.map(|t| t.uri.clone()).unwrap_or_default(), t.map(|t| t.title.clone()).unwrap_or_default())
     };
     match cmd {
         "cmd" => begin_ask(shared, Ask::Command, &rest.trim_start().replace("{url}", &uri).replace("{title}", &title)),
         "open" | "o" => {
             if arg.is_empty() { begin_ask(shared, Ask::Command, "open "); }
-            else { let u = config::to_uri(arg, &search); open_or_play(shared, &u, false); }
+            else { let u = shared.borrow().cfg.to_uri(arg); open_or_play(shared, &u, false); }
         }
         "tabopen" | "t" => {
             if arg.is_empty() { begin_ask(shared, Ask::Command, "tabopen "); }
-            else { let u = config::to_uri(arg, &search); open_or_play(shared, &u, true); }
+            else { let u = shared.borrow().cfg.to_uri(arg); open_or_play(shared, &u, true); }
         }
         "private" => {
             if arg.is_empty() { begin_ask(shared, Ask::Command, "private "); }
-            else { let u = config::to_uri(arg, &search); open_tab_as(shared, &u, false, true); }
+            else { let u = shared.borrow().cfg.to_uri(arg); open_tab_as(shared, &u, false, true); }
         }
         "play" => {
-            let target = if arg.is_empty() { uri.clone() } else { config::to_uri(arg, &search) };
+            let target = if arg.is_empty() { uri.clone() } else { shared.borrow().cfg.to_uri(arg) };
             if target.is_empty() || shared.borrow().cfg.video_player.is_empty() { set_message(shared, "No video player set (video_player in the config)"); }
             else { play(shared, &target); }
         }
@@ -1927,6 +2083,10 @@ fn run_command(shared: &Shared, line: &str) {
         "paste-tab" => paste_and_open(shared, true),
         "fullscreen" => { let a = shared.borrow(); let on = a.ui.tabbar.is_visible(); a.ui.tabbar.set_visible(!on); a.ui.bottom.set_visible(!on); }
         "dark" => toggle_dark(shared),
+        "reader" => reader(shared),
+        "print" => print_page(shared),
+        "pdf" => save_pdf(shared, arg),
+        "mute" => mute(shared, arg),
         "mic" => toggle_mic(shared),
         "dark-default" => {
             let on = { let mut a = shared.borrow_mut(); a.cfg.dark = !a.cfg.dark; a.cfg.dark };
@@ -2467,7 +2627,7 @@ fn bookmarks_page() -> String {
 
 /// Every command, grouped, for the help page. Keys come from the keymap.
 const COMMANDS: &[(&str, &str, &str)] = &[
-    ("Open and go", "open [url]", "open a URL, a search or a file here; asks when given nothing"),
+    ("Open and go", "open [url]", "open a URL, a search or a file here; asks when given nothing. A keyword first picks the search engine: w rust asks Wikipedia"),
     ("Open and go", "tabopen [url]", "the same in a new tab"),
     ("Open and go", "private [url]", "the same in a private tab: no history, and its cookies go when the last private tab closes"),
     ("Open and go", "cmd <text>", "open the command line with this text; {url} and {title} are filled in"),
@@ -2484,11 +2644,15 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Copy, zoom, view", "yank url|title", "copy to the clipboard"), ("Copy, zoom, view", "paste", "open what the clipboard holds here"), ("Copy, zoom, view", "paste-tab", "the same in a new tab"),
     ("Copy, zoom, view", "zoom-in", ""), ("Copy, zoom, view", "zoom-out", ""), ("Copy, zoom, view", "zoom-reset", ""), ("Copy, zoom, view", "zoom <percent>", ""),
     ("Copy, zoom, view", "fullscreen", "hide the tab bar and the status line; again to bring them back"),
+    ("Copy, zoom, view", "reader", "the article alone, without menus and side columns; again for the page as it was"),
+    ("Copy, zoom, view", "print", "the print dialog for this page"),
+    ("Copy, zoom, view", "pdf [file]", "save this page as a PDF: to the file, or under the page's title in the download folder"),
     ("Copy, zoom, view", "dark", "dark pages on or off for this site, kept for next time"),
     ("Copy, zoom, view", "mic", "let this site use the microphone and camera, kept for next time"),
     ("Copy, zoom, view", "dark-default", "the same for every site you have not set"),
     ("Tabs", "tab-next", "the next visible tab"), ("Tabs", "tab-prev", "the previous one"),
     ("Tabs", "tab <n>", "the n-th visible tab"), ("Tabs", "tab-first", ""), ("Tabs", "tab-last", ""),
+    ("Tabs", "mute [n]", "sound off or on for this tab, or for the n-th; ♪ marks a tab that plays, ♪✕ one that is off"),
     ("Tabs", "tab-move +1|-1|<n>", "move this tab"), ("Tabs", "close", "close this tab"), ("Tabs", "undo", "bring back the last closed tab"),
     ("Tab groups", "group [name]", "put this tab in the group, made on the spot when new; asks for the name when given none"),
     ("Tab groups", "ungroup", "take it out again"),
@@ -2578,7 +2742,8 @@ a login typed there gets the same question.</p>
 to <code>~/.gaze/adblock/hosts</code> and compiles it into a WebKit content filter; every domain on the list is blocked.
 <code>:adblock-update</code> fetches it again.</p>
 <h2>Files</h2>
-<p><code>~/.gaze/config.yml</code>: home page, search engine, download folder, zoom, scroll step, ad blocking, text size of the bars.
+<p><code>~/.gaze/config.yml</code>: home page, search engine, more search engines by keyword (<code>engines</code>), download folder,
+paper size (<code>paper: a4</code>), zoom, scroll step, ad blocking, text size of the bars.
 <code>~/.gaze/keys.yml</code>: your key changes. <code>~/.gaze/sync/bookmarks</code>: one per line.
 <code>~/.gaze/sync/</code>: shared with the phone's gaze through Syncthing (passwords, bookmarks, tabs sent across).
 <code>~/.gaze/session.json</code>: the open tabs and groups.</p>
@@ -2588,7 +2753,7 @@ to <code>~/.gaze/adblock/hosts</code> and compiles it into a WebKit content filt
 
 #[cfg(test)]
 mod tests {
-    use super::{picked, saved};
+    use super::{free_path, paper_name, pdf_name, picked, saved, tabbar_markup, Tabs};
 
     #[test]
     fn tab_walks_on_among_several_commands() {
@@ -2604,5 +2769,60 @@ mod tests {
         assert_eq!(saved("one", "two\n".into()).as_deref(), Some("two"));
         assert_eq!(saved("one\n", "one\ntwo\n".into()).as_deref(), Some("one\ntwo\n"));
         assert_eq!(saved("", "".into()), None);
+    }
+
+    #[test]
+    fn a_page_title_becomes_a_file_name() {
+        assert_eq!(pdf_name("Free will - Wikipedia", "https://en.wikipedia.org/wiki/Free_will"), "Free will - Wikipedia.pdf");
+        assert_eq!(pdf_name("a/b\\c: d?  \"e\" <f>|g*", "https://x.org"), "a b c d e f g.pdf");
+        assert_eq!(pdf_name("  ..hidden..  ", "https://x.org"), "hidden.pdf");
+        assert_eq!(pdf_name("line\none\ttab", "https://x.org"), "line one tab.pdf");
+        assert_eq!(pdf_name("", "https://isene.org/2026/10/Kart.html"), "isene.org.pdf");
+        assert_eq!(pdf_name("../..", "http://localhost:8080/x"), "localhost-8080.pdf");
+        assert_eq!(pdf_name("", "about:blank"), "page.pdf");
+        let long = pdf_name(&"æ".repeat(300), "https://x.org");
+        assert_eq!(long.chars().count(), 84, "80 letters and the ending");
+    }
+
+    #[test]
+    fn the_paper_in_the_config_gets_the_name_gtk_knows() {
+        assert_eq!(paper_name(""), None, "nothing set: the system decides");
+        assert_eq!(paper_name(" A4 ").as_deref(), Some("iso_a4"));
+        assert_eq!(paper_name("letter").as_deref(), Some("na_letter"));
+        assert_eq!(paper_name("iso_b4").as_deref(), Some("iso_b4"), "a name of GTK's own goes through");
+    }
+
+    #[test]
+    fn a_saved_page_never_takes_the_name_of_a_file_that_is_there() {
+        let dir = std::env::temp_dir().join(format!("gaze-pdf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(free_path(&dir, "A page.pdf"), dir.join("A page.pdf"));
+        std::fs::write(dir.join("A page.pdf"), "x").unwrap();
+        assert_eq!(free_path(&dir, "A page.pdf"), dir.join("A page-2.pdf"));
+        std::fs::write(dir.join("A page-2.pdf"), "x").unwrap();
+        assert_eq!(free_path(&dir, "A page.pdf"), dir.join("A page-3.pdf"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tab_that_plays_sound_is_marked_and_a_muted_one_too() {
+        let mut tabs = Tabs::default();
+        tabs.open("https://a.example/", false);
+        tabs.open("https://b.example/", true);
+        tabs.open("https://c.example/", true);
+        tabs.tabs[0].title = "Quiet".into();
+        tabs.tabs[1].title = "Song".into();
+        tabs.tabs[2].title = "Hushed".into();
+        tabs.tabs[1].audio = true;
+        tabs.tabs[2].audio = true;
+        tabs.tabs[2].muted = true;
+        let bar = tabbar_markup(&tabs);
+        assert!(bar.contains("1 Quiet") && !bar.contains("♪ Quiet"), "{bar}");
+        assert!(bar.contains("♪ Song"), "{bar}");
+        assert!(bar.contains("♪✕ Hushed"), "{bar}");
+        // A muted tab keeps its mark when the sound stops.
+        tabs.tabs[2].audio = false;
+        assert!(tabbar_markup(&tabs).contains("♪✕ Hushed"));
     }
 }

@@ -49,6 +49,12 @@ pub struct Tab {
     /// A private tab: never written to the session file.
     #[serde(skip)]
     pub private: bool,
+    /// The page is playing sound right now.
+    #[serde(skip)]
+    pub audio: bool,
+    /// Sound is switched off for this tab.
+    #[serde(skip)]
+    pub muted: bool,
 }
 
 #[derive(Default, Serialize, Deserialize, Debug)]
@@ -125,7 +131,7 @@ impl Tabs {
         self.next_id += 1;
         let group = self.current().and_then(|t| t.group);
         let at = if self.tabs.is_empty() { 0 } else { self.active + 1 };
-        self.tabs.insert(at, Tab { id, uri: uri.to_string(), title: String::new(), group, opener, pending: false, private: false });
+        self.tabs.insert(at, Tab { id, uri: uri.to_string(), title: String::new(), group, opener, pending: false, private: false, audio: false, muted: false });
         if !background || self.tabs.len() == 1 { self.active = at; }
         id
     }

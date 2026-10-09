@@ -14,7 +14,7 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 
 | Key | Does |
 |---|---|
-| `o` / `O` | Open a URL or a search here / in a new tab (`go`, `gO` start from the current URL). The prompt offers pages from your history and bookmarks; `Tab` picks one |
+| `o` / `O` | Open a URL or a search here / in a new tab (`go`, `gO` start from the current URL). The prompt offers pages from your history and bookmarks; `Tab` picks one. A keyword first picks the search engine: `w rust` asks Wikipedia (see Search engines) |
 | `f` / `F` | Hints: type the letters on a link to follow it / open it in a background tab |
 | `H` / `L`, `Ctrl-Left` / `Ctrl-Right` | Back / forward in this tab's history |
 | `r` | Reload |
@@ -22,6 +22,9 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 | `/`, `n` / `N` | Find on the page |
 | `Ctrl-f` | Only the page: hide the tab bar and the status line; again to bring them back |
 | `D` | Dark pages on or off for this site, kept for next time (see Dark pages) |
+| `gr` | Reader view: the article alone, without menus and side columns; again for the page as it was (see Reader view) |
+| `Ctrl-p` / `Ctrl-P` | Print the page / save it as a PDF in the download folder, named by its title (see Print and PDF) |
+| `Alt-m` | Sound off or on for this tab. `♪` in the tab bar marks a tab that plays sound, `♪✕` one that is switched off. `:mute 3` does it for tab 3 |
 | `i`, `gi` | Insert mode (type into the page) / focus the first field. A click on a field enters it too; `Tab` moves to the next field; `Esc` leaves |
 | `Ctrl-g` | In a text field: its text opens in your editor, in a new terminal window, and comes back into the field when you close it (`editor` in the config, `scribe` unless you change it; never a password field) |
 | `yy`, `pp` / `PP` | Copy the URL; open what the clipboard holds here / in a new tab |
@@ -132,6 +135,26 @@ Turning a page around is a blunt tool. A dark band on an otherwise light page co
 
 It costs something: about a fifth more work in the page for a big article, since every layer is painted twice.
 
+## Reader view
+
+`gr` shows the article alone: its text, pictures and links in one column, without menus, side columns and share boxes. `gr` again brings the page back as it was.
+
+gaze finds the article by its paragraphs: the part of the page with most of the running text wins. On a page with no such part gaze says so and leaves the page as it is. `f` follows the links in the article. The colours follow your dark setting.
+
+## Print and PDF
+
+`Ctrl-p` opens the print dialog. `Ctrl-P` saves the page as a PDF in the download folder, named by the page's title. `:pdf <file>` names the file yourself. A name that is taken gets `-2`, then `-3`.
+
+A page gaze has turned dark is printed in its own light colours. A site that is dark by its own style prints dark. Reader view always prints black on white, so `gr` first gives a clean light PDF of any article.
+
+`paper: a4` in the config sets the paper: `a3`, `a4`, `a5`, `letter` or `legal`. Left out, it follows the language settings of your system.
+
+## Search engines
+
+A keyword in front of what you type picks the search engine: `w free will` asks Wikipedia. Three are there from the start: `w` for Wikipedia, `yt` for YouTube and `gh` for GitHub.
+
+The list is `engines:` in the config, a keyword and a URL per line, with `%s` where your words go. Your own list replaces the three, and `engines: {}` turns them off. A keyword alone is a word like any other.
+
 ## Video
 
 A video page goes to `mpv` instead of the browser: a click on a YouTube link, a typed or pasted address, a link opened in a new tab. YouTube's own pages stay in gaze; only the watch pages leave. `v` sends the page you are on to `mpv`, for a video you reached inside YouTube itself. `mpv` plays YouTube through `yt-dlp`, and it costs about half the battery of the same video in a browser. Keep `yt-dlp` current. An old one is refused by YouTube, and then nothing happens at all: `mpv` starts, fails and exits.
@@ -165,7 +188,7 @@ Runtime: WebKitGTK 6.0 and GTK 4. Pages are painted on the graphics chip built i
 
 ## Files
 
-- `~/.gaze/config.yml`: home page, search engine (`%s` is the query), download folder, zoom, scroll step, ad blocking, dark pages, text size of the bars (`font_size`, in pixels), standing groups.
+- `~/.gaze/config.yml`: the settings. Home page, search engines, download folder, paper size, zoom and scroll step. Ad blocking, dark pages, text size of the bars (`font_size`, in pixels) and standing groups.
 - `~/.gaze/keys.yml`: the key bindings you changed.
 - `~/.gaze/sync/`: shared with the phone through Syncthing. `passwords` (the sealed logins), `bookmarks` (one per line), and `tabs/` (the tabs sent across, one file each).
 - `~/.gaze/dark`: the sites where dark pages differ from the default, one `<site> on` or `<site> off` per line.
