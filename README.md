@@ -81,7 +81,7 @@ Logins live in `~/.gaze/sync/passwords`, one file sealed with ChaCha20-Poly1305 
 
 ## The phone
 
-gaze has a phone half in [nomad](https://github.com/isene/nomad/tree/master/apps/gaze). The two share `~/.gaze/sync/` through Syncthing: the passwords, the bookmarks and the tabs sent across. The first start of gaze 0.3.28 moves the passwords and the bookmarks in there from `~/.gaze/`.
+gaze has a phone half in [nomad](https://github.com/isene/nomad/tree/master/apps/gaze). [Download it for Android (APK)](https://github.com/isene/nomad/releases/download/apk/gaze.apk); the [three steps to install it](https://isene.org/nomad/#get) are on the nomad page. The two share `~/.gaze/sync/` through Syncthing: the passwords, the bookmarks and the tabs sent across. The first start of gaze 0.3.28 moves the passwords and the bookmarks in there from `~/.gaze/`.
 
 `:send` opens the page you are on in gaze on the phone. A page the phone sends opens here as a background tab, and the status line says so.
 
