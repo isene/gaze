@@ -128,7 +128,7 @@ pub const PAGE: &str = r#"
     },
 
     // ---- the page as one HTML file ----
-    // What the page holds now: the parts that are folded away, what its
+    // All that is in the page now: the parts that are folded away, what its
     // scripts have built and what sits in shadow trees. The copy is made
     // node by node in a document of its own, where nothing runs or
     // loads. Scripts stay out and the file forbids them, so it shows the

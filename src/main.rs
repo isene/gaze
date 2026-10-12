@@ -1284,8 +1284,8 @@ fn page_file(shared: &Shared, arg: &str, endings: &[&str]) -> Option<PathBuf> {
 }
 
 /// Save the page as one HTML file: to the named file, or under the
-/// page's title in the download folder. The file has what the page holds
-/// now, the parts that are folded away too, and none of its scripts.
+/// page's title in the download folder. The file has all that is in the
+/// page now, the parts that are folded away too, and none of its scripts.
 fn save_html(shared: &Shared, arg: &str) {
     let Some(view) = current_view(&shared.borrow()) else { return };
     let Some(path) = page_file(shared, arg, &["html", "htm"]) else { return };
