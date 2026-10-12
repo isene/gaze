@@ -154,9 +154,9 @@ A page gaze has turned dark is printed in its own light colours. A site that is 
 
 `Ctrl-s` saves the page as one HTML file in the download folder, named by the page's title. `:save <file>` names the file yourself. A name that is taken gets `-2`, then `-3`.
 
-The file has all that is in the page at that moment: the text its scripts have built, and every part that is folded away. Folded `<details>` parts are saved open. Pictures and style sheets are not copied. The file points at the site for them, so they show while you are online.
+The file has all that is in the page at that moment. That includes the text its scripts have built and every part that is folded away. Folded `<details>` parts are saved open. Pictures and style sheets are not copied. The file points at the site for them, so they show while you are online.
 
-The page's scripts are left out, and the file forbids scripts: it shows the page as it was and runs nothing when you open it. A part the site fetches only when you click it is in the file once you have opened it on the page.
+The page's scripts are left out, and the file forbids scripts. It shows the page as it was and runs nothing when you open it. A part the site fetches only when you click it is in the file once you have opened it on the page.
 
 ## Search engines
 
