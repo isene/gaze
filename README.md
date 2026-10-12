@@ -24,6 +24,7 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 | `D` | Dark pages on or off for this site, kept for next time (see Dark pages) |
 | `gr` | Reader view: the article alone, without menus and side columns; again for the page as it was (see Reader view) |
 | `Ctrl-p` / `Ctrl-P` | Print the page / save it as a PDF in the download folder, named by its title (see Print and PDF) |
+| `Ctrl-s` | Save the page as one HTML file in the download folder, named by its title, with the parts that are folded away (see Save as HTML) |
 | `Alt-m` | Sound off or on for this tab. `♪` in the tab bar marks a tab that plays sound, `♪✕` one that is switched off. `:mute 3` does it for tab 3 |
 | `i`, `gi` | Insert mode (type into the page) / focus the first field. A click on a field enters it too; `Tab` moves to the next field; `Esc` leaves |
 | `Ctrl-g` | In a text field: its text opens in your editor, in a new terminal window, and comes back into the field when you close it (`editor` in the config, `scribe` unless you change it; never a password field) |
@@ -148,6 +149,14 @@ gaze finds the article by its paragraphs: the part of the page with most of the 
 A page gaze has turned dark is printed in its own light colours. A site that is dark by its own style prints dark. Reader view always prints black on white, so `gr` first gives a clean light PDF of any article.
 
 `paper: a4` in the config sets the paper: `a3`, `a4`, `a5`, `letter` or `legal`. Left out, it follows the language settings of your system.
+
+## Save as HTML
+
+`Ctrl-s` saves the page as one HTML file in the download folder, named by the page's title. `:save <file>` names the file yourself. A name that is taken gets `-2`, then `-3`.
+
+The file holds what the page holds at that moment: the text its scripts have built, and every part that is folded away. Folded `<details>` parts are saved open. Pictures and style sheets are not copied. The file points at the site for them, so they show while you are online.
+
+The page's scripts are left out, and the file forbids scripts: it shows the page as it was and runs nothing when you open it. A part the site fetches only when you click it is in the file once you have opened it on the page.
 
 ## Search engines
 

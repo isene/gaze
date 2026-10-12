@@ -1232,7 +1232,7 @@ fn page_setup(paper: &str) -> Option<gtk::PageSetup> {
 
 /// A file name for a page: its title, without what a file name cannot
 /// hold, or the site's name when the page has no title.
-fn pdf_name(title: &str, uri: &str) -> String {
+fn page_name(title: &str, uri: &str, ending: &str) -> String {
     let clean: String = title.chars()
         .map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { ' ' } else { c })
         .collect();
@@ -1242,7 +1242,7 @@ fn pdf_name(title: &str, uri: &str) -> String {
         let host = uri.split("://").nth(1).unwrap_or("").split(['/', '?', '#']).next().unwrap_or("");
         name = if host.is_empty() { "page".to_string() } else { host.replace(':', "-") };
     }
-    format!("{}.pdf", name)
+    format!("{}.{}", name, ending)
 }
 
 /// `name` in `dir`, or `name-2`, `name-3` when that file is there already.
@@ -1257,29 +1257,59 @@ fn free_path(dir: &std::path::Path, name: &str) -> PathBuf {
     path
 }
 
-/// Save the page as a PDF: to the named file, or under the page's title
-/// in the download folder.
-fn save_pdf(shared: &Shared, arg: &str) {
-    let (view, dir, title, uri, setup) = {
+/// The file a page is saved to: the named one, with the first of
+/// `endings` added when it has none of them, or the page's title in the
+/// download folder. The folder is made when it is not there.
+fn page_file(shared: &Shared, arg: &str, endings: &[&str]) -> Option<PathBuf> {
+    let (dir, title, uri) = {
         let a = shared.borrow();
         let t = a.tabs.current();
-        (current_view(&a), config::expand(&a.cfg.downloads),
-         t.map(|t| t.title.clone()).unwrap_or_default(), t.map(|t| t.uri.clone()).unwrap_or_default(),
-         page_setup(&a.cfg.paper))
+        (config::expand(&a.cfg.downloads),
+         t.map(|t| t.title.clone()).unwrap_or_default(), t.map(|t| t.uri.clone()).unwrap_or_default())
     };
-    let Some(view) = view else { return };
     let path = if arg.is_empty() {
-        free_path(&dir, &pdf_name(&title, &uri))
+        free_path(&dir, &page_name(&title, &uri, endings[0]))
     } else {
         let p = config::expand(arg);
-        if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) { p } else { PathBuf::from(format!("{}.pdf", p.display())) }
+        if p.extension().is_some_and(|e| endings.iter().any(|x| e.eq_ignore_ascii_case(x))) { p }
+        else { PathBuf::from(format!("{}.{}", p.display(), endings[0])) }
     };
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
             set_message(shared, &format!("{}: {}", parent.display(), e));
-            return;
+            return None;
         }
     }
+    Some(path)
+}
+
+/// Save the page as one HTML file: to the named file, or under the
+/// page's title in the download folder. The file has what the page holds
+/// now, the parts that are folded away too, and none of its scripts.
+fn save_html(shared: &Shared, arg: &str) {
+    let Some(view) = current_view(&shared.borrow()) else { return };
+    let Some(path) = page_file(shared, arg, &["html", "htm"]) else { return };
+    run_js_then(&view, "window.__gaze ? window.__gaze.html() : ''", move |v| {
+        let html = v.map(|v| v.to_str().to_string()).unwrap_or_default();
+        let text = if html.is_empty() { "This page cannot be saved as HTML".to_string() } else {
+            match std::fs::write(&path, html) {
+                Ok(()) => format!("Saved {}", path.display()),
+                Err(e) => format!("{}: {}", path.display(), e),
+            }
+        };
+        with_app(|s| set_message(s, &text));
+    });
+}
+
+/// Save the page as a PDF: to the named file, or under the page's title
+/// in the download folder.
+fn save_pdf(shared: &Shared, arg: &str) {
+    let (view, setup) = {
+        let a = shared.borrow();
+        (current_view(&a), page_setup(&a.cfg.paper))
+    };
+    let Some(view) = view else { return };
+    let Some(path) = page_file(shared, arg, &["pdf"]) else { return };
     // GTK's own printer that writes a file. No dialog: the name is known.
     let settings = gtk::PrintSettings::new();
     settings.set_printer("Print to File");
@@ -2086,6 +2116,7 @@ fn run_command(shared: &Shared, line: &str) {
         "reader" => reader(shared),
         "print" => print_page(shared),
         "pdf" => save_pdf(shared, arg),
+        "save" => save_html(shared, arg),
         "mute" => mute(shared, arg),
         "mic" => toggle_mic(shared),
         "dark-default" => {
@@ -2647,6 +2678,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Copy, zoom, view", "reader", "the article alone, without menus and side columns; again for the page as it was"),
     ("Copy, zoom, view", "print", "the print dialog for this page"),
     ("Copy, zoom, view", "pdf [file]", "save this page as a PDF: to the file, or under the page's title in the download folder"),
+    ("Copy, zoom, view", "save [file]", "save this page as one HTML file, with the parts that are folded away: to the file, or under the page's title in the download folder"),
     ("Copy, zoom, view", "dark", "dark pages on or off for this site, kept for next time"),
     ("Copy, zoom, view", "mic", "let this site use the microphone and camera, kept for next time"),
     ("Copy, zoom, view", "dark-default", "the same for every site you have not set"),
@@ -2753,7 +2785,9 @@ paper size (<code>paper: a4</code>), zoom, scroll step, ad blocking, text size o
 
 #[cfg(test)]
 mod tests {
-    use super::{free_path, paper_name, pdf_name, picked, saved, tabbar_markup, Tabs};
+    use super::{free_path, page_name, paper_name, picked, saved, tabbar_markup, Tabs};
+
+    fn pdf_name(title: &str, uri: &str) -> String { page_name(title, uri, "pdf") }
 
     #[test]
     fn tab_walks_on_among_several_commands() {
@@ -2780,6 +2814,7 @@ mod tests {
         assert_eq!(pdf_name("", "https://isene.org/2026/10/Kart.html"), "isene.org.pdf");
         assert_eq!(pdf_name("../..", "http://localhost:8080/x"), "localhost-8080.pdf");
         assert_eq!(pdf_name("", "about:blank"), "page.pdf");
+        assert_eq!(page_name("Free will", "https://x.org", "html"), "Free will.html");
         let long = pdf_name(&"æ".repeat(300), "https://x.org");
         assert_eq!(long.chars().count(), 84, "80 letters and the ending");
     }

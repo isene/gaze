@@ -1,6 +1,7 @@
 #!/bin/bash
 # End-to-end test of what gaze does with a page: the reader view, saving
-# a PDF, search engines by keyword, and the mark on a tab that plays sound.
+# a PDF, saving the page as HTML, search engines by keyword, and the mark
+# on a tab that plays sound.
 #
 # It runs the release build in its own X server (Xvfb), its own D-Bus
 # session and a throwaway HOME. Your running gaze and your ~/.gaze are
@@ -58,11 +59,20 @@ SOUND = ("<html><head><title>sound</title></head><body>"
   "<button style=\"position:fixed;left:0;top:0;width:100vw;height:100vh\" onclick=\"go()\">play</button><script>"
   "function go(){const c=new AudioContext(),o=c.createOscillator(),g=c.createGain();g.gain.value=0.0001;"
   "o.connect(g);g.connect(c.destination);o.start();document.title=\"playing\";}</script></body></html>")
+# A page with a folded part, a hidden part, a part its script builds and
+# a shadow tree. Its body has a handler that would rename a saved copy.
+FOLDED = ("<html><head><title>Folded</title><meta http-equiv=refresh content=\"900;url=/next\"></head>"
+  "<body onload=\"if(location.protocol==\x27file:\x27)document.title=\x27HANDLER\x27\">"
+  "<details><summary>More</summary><p>FOLDWORD</p></details><div style=\"display:none\">UNSEENWORD</div>"
+  "<a href=next>a link</a><my-box></my-box>"
+  "<script>/* SCRIPTWORD */ document.body.append(\"BUILTWORD\");"
+  "document.querySelector(\"my-box\").attachShadow({mode:\"open\"}).innerHTML=\"<p>SHADOWWORD</p>\";</script>"
+  "</body></html>")
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
         open(sys.argv[2], "a").write(self.path + "\n")
         page = self.path.split("?")[0]
-        b = ARTICLE if page == "/article" else SOUND if page == "/sound" else "<html><title>%s</title><body>short</body></html>" % page.strip("/")
+        b = ARTICLE if page == "/article" else SOUND if page == "/sound" else FOLDED if page == "/folded" else "<html><title>%s</title><body>short</body></html>" % page.strip("/")
         b = b.encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -189,6 +199,27 @@ start "a dark page on paper" "$URL/article" "The Article" && {
     xdotool key D
     wait_for said "Dark pages off"
     check "D again gives the light page back" wait_for not dark_now
+}; stop
+
+start "save as HTML" "$URL/folded" "Folded" && {
+    xdotool key ctrl+s
+    check "Ctrl-s saves the page under its title" wait_for said "Saved $DL/Folded.html"
+    for word in FOLDWORD UNSEENWORD BUILTWORD SHADOWWORD; do
+        check "the file has $word" grep -q $word "$DL/Folded.html"
+    done
+    check "and none of the page's scripts" not grep -q 'SCRIPTWORD\|<script' "$DL/Folded.html"
+    check "its links are the site's" grep -q "<base href=\"$URL/folded\">" "$DL/Folded.html"
+    check "nothing in it sends the reader on" not grep -qi refresh "$DL/Folded.html"
+    xdotool key ctrl+s
+    check "a second file gets a name of its own" wait_for test -s "$DL/Folded-2.html"
+}; stop
+
+start "the saved file" "file://$DL/Folded.html" "Folded" && {
+    check "none of the page's code runs in it" title_is Folded
+    xdotool key ctrl+shift+p
+    check "it is saved as a PDF" wait_for test -s "$DL/Folded.pdf"
+    check "the folded part shows in it, and the shadow tree" eval 'pdf_has "$DL/Folded.pdf" FOLDWORD && pdf_has "$DL/Folded.pdf" SHADOWWORD'
+    check "what the page hid stays hidden" not pdf_has "$DL/Folded.pdf" UNSEENWORD
 }; stop
 
 start "search engines" "$URL/start" "start" && {

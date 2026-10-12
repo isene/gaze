@@ -127,6 +127,46 @@ pub const PAGE: &str = r#"
       return 'none';
     },
 
+    // ---- the page as one HTML file ----
+    // What the page holds now: the parts that are folded away, what its
+    // scripts have built and what sits in shadow trees. The copy is made
+    // node by node in a document of its own, where nothing runs or
+    // loads. Scripts stay out and the file forbids them, so it shows the
+    // page as it was and runs nothing when it is opened.
+    html() {
+      if (!document.head) return '';
+      const out = document.implementation.createHTMLDocument('');
+      const skip = 'script, base, meta[charset], meta[http-equiv], gaze-reader, #__gaze_dark, #__gaze_hints';
+      const inside = n => n instanceof HTMLTemplateElement ? n.content : n;
+      const copy = (from, to) => {
+        for (const n of from.childNodes) {
+          if (n.nodeType === 1 && n.matches(skip)) continue;
+          const c = to.appendChild(out.importNode(n, false));
+          if (n.nodeType !== 1) continue;
+          if (n.localName === 'details') c.setAttribute('open', '');
+          if (n.shadowRoot) {
+            const t = c.appendChild(out.createElement('template'));
+            t.setAttribute('shadowrootmode', 'open');
+            copy(n.shadowRoot, t.content);
+          }
+          copy(inside(n), inside(c));
+        }
+      };
+      const root = out.importNode(document.documentElement, false);
+      copy(document.documentElement, root);
+      const head = root.querySelector('head');
+      const first = (name, attrs) => {
+        const e = out.createElement(name);
+        for (const k in attrs) e.setAttribute(k, attrs[k]);
+        head.prepend(e);
+      };
+      // The file is written as UTF-8, and its links and pictures are the site's.
+      first('base', { href: document.baseURI });
+      first('meta', { 'http-equiv': 'Content-Security-Policy', content: "script-src 'none'" });
+      first('meta', { charset: 'utf-8' });
+      return '<!DOCTYPE html>\n' + root.outerHTML;
+    },
+
     // ---- reader view: the article alone ----
     reader() {
       const on = document.querySelector('gaze-reader');
