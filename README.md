@@ -37,6 +37,7 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 | `M`, `gb` / `gB` | Bookmark this page; the bookmark list here / in a new tab |
 | `gp` | Fill the login form; again for the next saved login of the site |
 | `v` | Play this page's video in `mpv` (see Video) |
+| `V` | Open the page of the video last sent to `mpv`, in a new tab: for its comments |
 | `Ctrl-a` | A Claude session about the page, in a new terminal window (`claude` on the PATH; the terminal is `terminal` in the config, `glass --` unless you change it). In insert mode `Ctrl-a` still selects the field's text |
 | `:` | Command line |
 | `Q`, `ZZ` | Quit |
@@ -167,6 +168,8 @@ The list is `engines:` in the config, a keyword and a URL per line, with `%s` wh
 ## Video
 
 A video page goes to `mpv` instead of the browser: a click on a YouTube link, a typed or pasted address, a link opened in a new tab. YouTube's own pages stay in gaze; only the watch pages leave. `v` sends the page you are on to `mpv`, for a video you reached inside YouTube itself. `mpv` plays YouTube through `yt-dlp`, and it costs about half the battery of the same video in a browser. Keep `yt-dlp` current. An old one is refused by YouTube, and then nothing happens at all: `mpv` starts, fails and exits.
+
+`V` opens the video's own page in a new tab, to read the comments and answer them. It takes the video last sent to `mpv`, and `:video-page <address>` takes any other. Nothing in that tab plays by itself, so `mpv` can go on playing. A link to one comment (`lc=` in a YouTube address) opens as a page too, never in `mpv`.
 
 `video_player` in the config names the program, empty keeps videos in gaze, and `video_urls` lists how a video page's address starts.
 

@@ -1,7 +1,8 @@
 #!/bin/bash
 # End-to-end test of what gaze does with a page: the reader view, saving
-# a PDF, saving the page as HTML, search engines by keyword, and the mark
-# on a tab that plays sound.
+# a PDF, saving the page as HTML, search engines by keyword, the mark on
+# a tab that plays sound, and a video page: handed to the player, or shown
+# as a page for its comments.
 #
 # It runs the release build in its own X server (Xvfb), its own D-Bus
 # session and a throwaway HOME. Your running gaze and your ~/.gaze are
@@ -11,7 +12,7 @@
 # Needs: Xvfb, xdotool, python3, dbus-run-session, pdftotext and pdfinfo
 # (poppler), import and convert (ImageMagick).
 # Run:   cargo build --release && tests/pages.sh
-# Takes about a minute. Exit code 0 when every check passes.
+# Takes about two minutes. Exit code 0 when every check passes.
 # KEEP=1 keeps the test folder, with a picture of the screen per case.
 
 GAZE=$(dirname "$(readlink -f "$0")")/../target/release/gaze
@@ -38,7 +39,13 @@ engines:
   w: $URL/wiki?s=%s
 downloads: $T/home/Downloads
 paper: a4
+video_player: $T/player
+video_urls:
+  - $URL/watch
 CONF
+# The video player is a stand-in that writes down what it was given.
+PLAYED=$T/played.log
+printf '#!/bin/sh\necho "$1" >> "%s"\n' "$PLAYED" > "$T/player"; chmod +x "$T/player"; : > "$PLAYED"
 printf '</usr/share/alsa/alsa.conf>\npcm.!default { type null }\n' > "$T/asound.conf"
 LOG=$T/home/.gaze/stderr.log
 ASKED=$T/asked.log
@@ -47,7 +54,7 @@ DL=$T/home/Downloads
 # The test pages. The article forbids style elements, as strict sites do,
 # and has a menu, a side column, a share box and a footer around its text.
 python3 -c '
-import sys
+import struct, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 P = "A paragraph of the article, long enough to count as text and not as a caption or a label. "
 ARTICLE = ("<html><head><title>The Article</title></head><body>"
@@ -68,14 +75,25 @@ FOLDED = ("<html><head><title>Folded</title><meta http-equiv=refresh content=\"9
   "<script>/* SCRIPTWORD */ document.body.append(\"BUILTWORD\");"
   "document.querySelector(\"my-box\").attachShadow({mode:\"open\"}).innerHTML=\"<p>SHADOWWORD</p>\";</script>"
   "</body></html>")
+# A list with one video, a link to one comment, and a page that starts a
+# silent video by itself and tells the server how that went. The video
+# page is that last page too. It has to be a video element: WebKit lets a
+# silent audio element start even where nothing may start by itself.
+VIDEOS = "<html><head><title>videos</title></head><body><a href=\"/watch?v=one\">a video</a></body></html>"
+COMMENT = "<html><head><title>comment</title></head><body><a href=\"/watch?v=two&amp;lc=abc\">a comment</a></body></html>"
+CLIP = ("<html><head><title>clip</title></head><body><video id=a muted loop src=/silence.wav></video><script>"
+  "document.getElementById(\"a\").play().then(function(){fetch(\"/started\"+location.pathname)},"
+  "function(){fetch(\"/refused\"+location.pathname)});</script></body></html>")
+WAV = (b"RIFF" + struct.pack("<I", 36 + 8000) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, 8000, 8000, 1, 8)
+  + b"data" + struct.pack("<I", 8000) + bytes([128]) * 8000)
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
         open(sys.argv[2], "a").write(self.path + "\n")
         page = self.path.split("?")[0]
-        b = ARTICLE if page == "/article" else SOUND if page == "/sound" else FOLDED if page == "/folded" else "<html><title>%s</title><body>short</body></html>" % page.strip("/")
-        b = b.encode()
+        b = ARTICLE if page == "/article" else SOUND if page == "/sound" else FOLDED if page == "/folded" else VIDEOS if page == "/videos" else COMMENT if page == "/comment" else CLIP if page in ("/clip", "/watch") else "<html><title>%s</title><body>short</body></html>" % page.strip("/")
+        b = WAV if page == "/silence.wav" else b.encode()
         self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", "audio/wav" if page == "/silence.wav" else "text/html; charset=utf-8")
         if page == "/article": self.send_header("Content-Security-Policy", "default-src \x27self\x27; style-src \x27self\x27")
         self.send_header("Content-Length", str(len(b)))
         self.end_headers()
@@ -102,6 +120,9 @@ dialog() { xdotool search --onlyvisible --name '^Print$' >/dev/null 2>&1; }
 # The middle of the screen is mostly dark.
 dark_now() { [ "$(import -window root png:- 2>/dev/null | convert - -gravity center -crop 60%x60%+0+0 -format '%[fx:mean<0.35?1:0]' info: 2>/dev/null)" = 1 ]; }
 pdf_has() { pdftotext "$1" - 2>/dev/null | grep -q "$2"; }
+asked() { grep -qxF "$1" "$ASKED"; }
+asked_times() { [ "$(grep -cxF "$2" "$ASKED")" -ge "$1" ]; }
+played() { grep -qxF "$URL$1" "$PLAYED"; }
 # Wait up to ten seconds for a command to come true.
 wait_for() { for _ in $(seq 40); do "$@" && return 0; sleep 0.25; done; return 1; }
 
@@ -239,6 +260,33 @@ start "sound" "$URL/sound" "sound" && {
     shot muted
     xdotool key alt+m
     check "and on again" wait_for said "Sound on for the tab"
+}; stop
+
+start "a video page" "$URL/videos" "videos" && {
+    xdotool key f; sleep 0.7; xdotool key a
+    check "a link to a video goes to the player" wait_for played "/watch?v=one"
+    sleep 1
+    check "and gaze does not load its page" not asked "/watch?v=one"
+    xdotool key V
+    check "V opens the video's own page in gaze" wait_for asked "/watch?v=one"
+    check "where nothing starts by itself" wait_for asked "/refused/watch"
+    check "and the player is not started again" [ "$(wc -l < "$PLAYED")" = 1 ]
+    shot video-page
+    xdotool key d; sleep 0.5; xdotool key u
+    check "the closed page comes back as a page" wait_for asked_times 2 "/watch?v=one"
+    check "with the player still left alone" [ "$(wc -l < "$PLAYED")" = 1 ]
+}; stop
+
+start "a page that plays by itself" "$URL/clip" "clip" && {
+    check "any other page may start a silent video" wait_for asked "/started/clip"
+}; stop
+
+: > "$PLAYED"
+start "a link to a comment" "$URL/comment" "comment" && {
+    xdotool key f; sleep 0.7; xdotool key a
+    check "a link to one comment opens in gaze" wait_for asked "/watch?v=two&lc=abc"
+    sleep 1
+    check "and the player is left alone" not test -s "$PLAYED"
 }; stop
 
 if [ $FAILED = 0 ]; then echo "all passed"; else echo "$FAILED failed"; fi

@@ -20,10 +20,10 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use webkit6::prelude::*;
 use webkit6::{
-    AuthenticationRequest, CookieAcceptPolicy, CookiePersistentStorage, Credential, CredentialPersistence, Download, FindOptions, LoadEvent,
+    AuthenticationRequest, AutoplayPolicy, CookieAcceptPolicy, CookiePersistentStorage, Credential, CredentialPersistence, Download, FindOptions, LoadEvent,
     NavigationPolicyDecision, NetworkSession, PolicyDecisionType, ResponsePolicyDecision, Settings,
     URISchemeRequest, UserContentFilter, UserContentFilterStore, UserContentInjectedFrames,
-    UserContentManager, UserScript, UserScriptInjectionTime, WebContext, WebView,
+    UserContentManager, UserScript, UserScriptInjectionTime, WebContext, WebView, WebsitePolicies,
 };
 
 use passwords::{Change, Login, Store};
@@ -80,6 +80,8 @@ struct App {
     typed: HashSet<u64>,
     /// Closed tabs, newest last: uri and group name.
     closed: Vec<(String, Option<String>)>,
+    /// The video page last handed to the player, for `video-page`.
+    last_video: String,
     find: String,
     session_path: PathBuf,
     save_pending: bool,
@@ -370,7 +372,7 @@ fn build(app: &gtk::Application) -> Shared {
         cfg, tabs, views: HashMap::new(), session, private_session: None, settings,
         mode: Mode::Normal, keys: String::new(), ask: Ask::Command, prompt: None,
         message: String::new(), hover: String::new(), store, fill_at: HashMap::new(), login_boxes: HashMap::new(), typed: HashSet::new(),
-        closed: Vec::new(), find: String::new(), session_path, save_pending: false,
+        closed: Vec::new(), last_video: String::new(), find: String::new(), session_path, save_pending: false,
         keymap, marks, dark_sites, mic_sites, hist, tab_watch: None, offers: Vec::new(), selected: None, setting_text: false, filter: None,
     }));
 
@@ -499,9 +501,10 @@ fn style(font_size: u32) {
 /// listens to. Each view gets its own content manager so a message from
 /// the page says which tab sent it.
 fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
-    let (settings, zoom, filter, dark, private) = {
+    let (settings, zoom, filter, dark, private, quiet) = {
         let a = shared.borrow();
-        (a.settings.clone(), a.cfg.zoom, a.filter.clone(), dark_wanted(&a), a.tabs.is_private(id))
+        let quiet = a.tabs.tabs.iter().find(|t| t.id == id).is_some_and(|t| video_page(&a, &t.uri));
+        (a.settings.clone(), a.cfg.zoom, a.filter.clone(), dark_wanted(&a), a.tabs.is_private(id), quiet)
     };
     let session = if private { private_session(shared) } else { shared.borrow().session.clone() };
     let ucm = UserContentManager::new();
@@ -520,7 +523,13 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
         // A popup shares its opener's process and session, so the two
         // pages can talk (window.opener, postMessage).
         Some(parent) => WebView::builder().related_view(parent).user_content_manager(&ucm).settings(&settings).build(),
-        None => WebView::builder().network_session(&session).user_content_manager(&ucm).settings(&settings).build(),
+        None => {
+            let b = WebView::builder().network_session(&session).user_content_manager(&ucm).settings(&settings);
+            // A video page shown in gaze is there to be read, and the
+            // player may be playing the same video: nothing in this tab
+            // starts by itself.
+            if quiet { b.website_policies(&WebsitePolicies::builder().autoplay(AutoplayPolicy::Deny).build()).build() } else { b.build() }
+        }
     };
     view.set_vexpand(true);
     view.set_hexpand(true);
@@ -1351,15 +1360,26 @@ fn set_mode(shared: &Shared, mode: Mode) {
 
 // ------------------------------------------------------------------ tabs
 
+/// Does the address start like a video page, with a player set to take it?
+fn video_page(a: &App, uri: &str) -> bool {
+    !a.cfg.video_player.is_empty() && a.cfg.video_urls.iter().any(|p| uri.starts_with(p.as_str()))
+}
+
+/// A link to one comment under a video (`lc=` on YouTube). It is there
+/// to be read, so it is shown and not played.
+fn comment_link(uri: &str) -> bool {
+    uri.split_once('?').is_some_and(|(_, query)| query.split('&').any(|part| part.starts_with("lc=")))
+}
+
 /// Is this a page the config sends to the video player?
 fn is_video(shared: &Shared, uri: &str) -> bool {
-    let a = shared.borrow();
-    !a.cfg.video_player.is_empty() && a.cfg.video_urls.iter().any(|p| uri.starts_with(p.as_str()))
+    video_page(&shared.borrow(), uri) && !comment_link(uri)
 }
 
 /// Hand a video page to the player, detached, and say so.
 fn play(shared: &Shared, uri: &str) {
     let player = shared.borrow().cfg.video_player.clone();
+    shared.borrow_mut().last_video = uri.to_string();
     match std::process::Command::new(&player).arg(uri)
         .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
         Ok(child) => {
@@ -1423,6 +1443,11 @@ fn open_tab_as(shared: &Shared, uri: &str, background: bool, private: bool) -> u
         if is_mail(uri) { mail(shared, uri); } else { play(shared, uri); }
         return shared.borrow().tabs.current().map(|t| t.id).unwrap_or(0);
     }
+    open_page(shared, uri, background, private)
+}
+
+/// Open a tab on the address as it is: a video page is shown, not played.
+fn open_page(shared: &Shared, uri: &str, background: bool, private: bool) -> u64 {
     let id = {
         let mut a = shared.borrow_mut();
         let id = a.tabs.open(uri, background);
@@ -1615,7 +1640,8 @@ fn undo_close(shared: &Shared) {
         set_message(shared, "Nothing to undo");
         return;
     };
-    open_tab(shared, &uri, false);
+    // The closed tab showed a page, so a video page comes back as a page.
+    open_page(shared, &uri, false, false);
     if let Some(name) = group {
         let idx = shared.borrow().tabs.active;
         shared.borrow_mut().tabs.set_group(idx, &name);
@@ -2079,6 +2105,11 @@ fn run_command(shared: &Shared, line: &str) {
             let target = if arg.is_empty() { uri.clone() } else { shared.borrow().cfg.to_uri(arg) };
             if target.is_empty() || shared.borrow().cfg.video_player.is_empty() { set_message(shared, "No video player set (video_player in the config)"); }
             else { play(shared, &target); }
+        }
+        "video-page" => {
+            let target = if arg.is_empty() { shared.borrow().last_video.clone() } else { shared.borrow().cfg.to_uri(arg) };
+            if target.is_empty() { set_message(shared, "No video sent to the player yet"); }
+            else { open_page(shared, &target, false, current_private(shared)); }
         }
         "home" => { let h = shared.borrow().cfg.home.clone(); with_view(shared, |v| v.load_uri(&h)); }
         "back" => with_view(shared, |v| v.go_back()),
@@ -2702,6 +2733,8 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Passwords", "password-master", "choose a new master password"),
     ("Other", "bind <keys> <command>", "bind keys; kept in ~/.gaze/keys.yml"), ("Other", "unbind <keys>", ""),
     ("Other", "adblock-update", "fetch the hosts list again and rebuild the ad blocker"),
+    ("Other", "play [url]", "this page, or the address, in the video player"),
+    ("Other", "video-page [url]", "the page of the video last sent to the player, or of the address, in a new tab: for its comments"),
     ("Other", "claude", "a Claude session about this page, in a new terminal window"),
     ("Other", "help", "this page"), ("Other", "inspect", "the web inspector"), ("Other", "session-save", ""), ("Other", "quit", ""),
 ];
