@@ -71,6 +71,17 @@ impl Bookmarks {
         Ok(true)
     }
 
+    /// Give a known bookmark a new name. False when it is not there.
+    pub fn rename(&mut self, url: &str, title: &str) -> Result<bool, String> {
+        self.refresh();
+        // A tab or a line break in the name would break the file.
+        let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+        let Some(b) = self.list.iter_mut().find(|b| b.url == url.trim()) else { return Ok(false) };
+        b.title = title;
+        self.save()?;
+        Ok(true)
+    }
+
     /// Remove every bookmark in `urls`, with one write. Returns how many went.
     pub fn remove_all(&mut self, urls: &[String]) -> Result<usize, String> {
         self.refresh();
@@ -196,6 +207,16 @@ mod tests {
         assert_eq!(gone, 2);
         let urls: Vec<String> = Bookmarks::load(b.path.clone()).list().iter().map(|x| x.url.clone()).collect();
         assert_eq!(urls, ["https://a.no/", "https://c.no/"]);
+        let _ = std::fs::remove_dir_all(b.path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_new_name_is_kept_on_one_line_and_never_adds_a_bookmark() {
+        let mut b = fresh("rename");
+        b.add("https://a.no/", "A").unwrap();
+        assert!(b.rename("https://a.no/", " My\tpage\n").unwrap());
+        assert!(!b.rename("https://gone.no/", "X").unwrap());
+        assert_eq!(Bookmarks::load(b.path.clone()).list(), &[Bookmark { url: "https://a.no/".into(), title: "My page".into() }]);
         let _ = std::fs::remove_dir_all(b.path.parent().unwrap());
     }
 

@@ -93,7 +93,7 @@ Both sides read a changed file again before they write it. A login saved on the 
 
 `o` on its own lists the pages you were at last. Typing narrows the list to pages whose URL or title holds every word you typed, bookmarks (★) first. `Tab` and `Shift-Tab` put one on the line and `Return` opens it. Visits are kept in `~/.gaze/history`, the last five thousand pages.
 
-`M` bookmarks the page under its title, and `:bookmark-add <title>` gives it a name of your own. `gb` shows the list, where `f` and the letters open one. Tick the boxes there (or Mark all) and press Delete marked to remove them; `:bookmark-del` forgets the current page. `:bookmark-import ~/bookmarks.html` reads the file Firefox writes from Manage Bookmarks → Import and Backup → Export Bookmarks to HTML. The list is `~/.gaze/sync/bookmarks`, one URL, a tab and a title per line.
+`M` bookmarks the page under its title, and `:bookmark-add <title>` gives it a name of your own. `gb` shows the list, where `f` and the letters open one. Tick the boxes there (or Mark all) and press Delete marked to remove them, or press ✎ beside one to rename it; `:bookmark-del` forgets the current page. `:bookmark-import ~/bookmarks.html` reads the file Firefox writes from Manage Bookmarks → Import and Backup → Export Bookmarks to HTML. The list is `~/.gaze/sync/bookmarks`, one URL, a tab and a title per line.
 
 ## Ad blocking
 

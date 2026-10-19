@@ -2507,6 +2507,18 @@ fn on_message(shared: &Shared, id: u64, text: &str) {
             };
             offer_save(shared, login);
         }
+        "bookmark-name" => {
+            if v.get("key").and_then(|k| k.as_str()) != Some(page_key()) { return; }
+            let field = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let r = shared.borrow_mut().marks.rename(&field("url"), &field("title"));
+            match r {
+                Ok(true) => set_message(shared, "Bookmark renamed"),
+                Ok(false) => set_message(shared, "Not a bookmark"),
+                Err(e) => set_message(shared, &format!("Bookmarks: {}", e)),
+            }
+            let view = shared.borrow().views.get(&id).cloned();
+            if let Some(view) = view { view.reload(); }
+        }
         "bookmarks-del" => {
             if v.get("key").and_then(|k| k.as_str()) != Some(page_key()) { return; }
             let urls: Vec<String> = v.get("urls").and_then(|u| u.as_array()).map(|a| {
@@ -2669,7 +2681,9 @@ fn passwords_page() -> String {
 const PAGE_CSS: &str = "body{background:#1e1e1e;color:#d0d0d0;font:15px/1.5 sans-serif;max-width:56em;margin:2em auto;padding:0 1em}\
  h1{color:#f0883e}h2{color:#e0b93a;margin-top:1.6em}code,kbd{font-family:monospace;background:#2c2c2c;padding:1px 5px;border-radius:3px;color:#fff}\
  table{border-collapse:collapse}td,th{text-align:left;padding:3px 14px 3px 0;vertical-align:top}th{color:#e0b93a;padding-top:1.2em}\
- a{color:#7ab7ff;text-decoration:none}a:hover{text-decoration:underline}.u{color:#8a8a8a;font-size:13px}\
+ a{color:#7ab7ff;text-decoration:none}a:hover{text-decoration:underline}\
+ button.r{background:none;border:0;color:#777;cursor:pointer;padding:0 6px}button.r:hover{color:#fff}\
+ input.n{background:#2c2c2c;color:#fff;border:1px solid #666;font:inherit;width:24em}.u{color:#8a8a8a;font-size:13px}\
  .help{max-width:80em}.hero{display:flex;gap:1.8em;align-items:center;margin-bottom:1.4em}.hero svg{width:120px;height:120px;flex:none}\
  .hero h1{margin:0 0 .15em;font-size:2.4em}.v{color:#8a8a8a;font-size:.45em;font-weight:normal;margin-left:.5em}\
  .tag{margin:0 0 .5em;color:#eee;font-size:17px}.links a{margin-right:1.3em;white-space:nowrap}\
@@ -2688,8 +2702,9 @@ fn bookmarks_page() -> String {
         a.marks.refresh();
         a.marks.list().iter().map(|b| {
             let title = if b.title.is_empty() { b.url.clone() } else { b.title.clone() };
-            format!("<tr><td><input type=checkbox data-u=\"{0}\"></td><td><a href=\"{0}\">{1}</a></td><td class=u>{0}</td></tr>",
-                    esc(&b.url), esc(&title))
+            format!("<tr><td><input type=checkbox data-u=\"{0}\"></td><td><a href=\"{0}\">{1}</a>\
+                     <button class=r title=Rename data-u=\"{0}\" data-t=\"{2}\">✎</button></td><td class=u>{0}</td></tr>",
+                    esc(&b.url), esc(&title), esc(&b.title))
         }).collect::<String>()
     }).unwrap_or_default();
     if rows.is_empty() {
@@ -2702,17 +2717,23 @@ fn bookmarks_page() -> String {
              <table>{}</table><script>{}</script>", rows, BOOKMARKS_JS.replace("KEY", page_key()))
 }
 
-/// Tick boxes on gaze://bookmarks. The key in the message shows gaze the
-/// page is its own: a web site could post the same message, but it
+/// Tick boxes and ✎ on gaze://bookmarks. The key in a message shows gaze
+/// the page is its own: a web site could post the same message, but it
 /// cannot read a gaze:// page to learn the key.
-const BOOKMARKS_JS: &str = "const boxes=[...document.querySelectorAll('input[data-u]')];\
+const BOOKMARKS_JS: &str = "const send=m=>window.webkit.messageHandlers.gaze.postMessage(JSON.stringify(Object.assign({key:'KEY'},m)));\
+ const boxes=[...document.querySelectorAll('input[data-u]')];\
  const all=document.getElementById('all'),del=document.getElementById('del');\
  const marked=()=>boxes.filter(b=>b.checked);\
  const sync=()=>{const n=marked().length;del.disabled=!n;del.textContent=n?'Delete '+n+' marked':'Delete marked';\
  all.checked=n===boxes.length;all.indeterminate=n>0&&n<boxes.length;};\
  all.onchange=()=>{boxes.forEach(b=>b.checked=all.checked);sync();};\
  boxes.forEach(b=>b.onchange=sync);\
- del.onclick=()=>window.webkit.messageHandlers.gaze.postMessage(JSON.stringify({t:'bookmarks-del',key:'KEY',urls:marked().map(b=>b.dataset.u)}));";
+ del.onclick=()=>send({t:'bookmarks-del',urls:marked().map(b=>b.dataset.u)});\
+ document.querySelectorAll('button.r').forEach(b=>b.onclick=()=>{\
+ const a=b.previousElementSibling,i=document.createElement('input');\
+ i.className='n';i.value=b.dataset.t;a.replaceWith(i);b.hidden=true;i.focus();i.select();\
+ i.onkeydown=e=>{if(e.key==='Enter')send({t:'bookmark-name',url:b.dataset.u,title:i.value});};\
+ i.onblur=()=>{i.replaceWith(a);b.hidden=false;};});";
 
 /// A random key made once a run, for messages from gaze's own pages.
 fn page_key() -> &'static str {
@@ -2764,7 +2785,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Tab groups", "groups", "list the groups"),
     ("Bookmarks", "bookmark-add [title]", "bookmark this page, under the title given or its own"), ("Bookmarks", "bookmark-del [url]", "forget this page's bookmark"),
     ("Tabs", "send", "open this page in gaze on the phone"),
-    ("Bookmarks", "bookmarks", "the list, at gaze://bookmarks; tick boxes there to delete"), ("Bookmarks", "bookmark-import <file>", "read a Firefox HTML export"),
+    ("Bookmarks", "bookmarks", "the list, at gaze://bookmarks; tick boxes there to delete, ✎ to rename"), ("Bookmarks", "bookmark-import <file>", "read a Firefox HTML export"),
     ("Passwords", "fill", "fill the login form; again for the next saved login of the site"),
     ("Passwords", "passwords", "list the sites and usernames"), ("Passwords", "password-import <csv>", "read the CSV Firefox writes from about:logins → Export, then delete it"),
     ("Passwords", "password-remove <username>", "forget one login for this site"), ("Passwords", "password-lock", "lock the store for this session"),
