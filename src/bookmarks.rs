@@ -71,6 +71,16 @@ impl Bookmarks {
         Ok(true)
     }
 
+    /// Remove every bookmark in `urls`, with one write. Returns how many went.
+    pub fn remove_all(&mut self, urls: &[String]) -> Result<usize, String> {
+        self.refresh();
+        let before = self.list.len();
+        self.list.retain(|b| !urls.iter().any(|u| u.trim() == b.url));
+        let gone = before - self.list.len();
+        if gone > 0 { self.save()?; }
+        Ok(gone)
+    }
+
     /// Import the HTML file Firefox writes from Bookmarks → Manage →
     /// Import and Backup → Export Bookmarks to HTML. Returns how many
     /// were new.
@@ -175,6 +185,17 @@ mod tests {
         let mut again = again;
         assert!(again.remove("https://isene.org").unwrap());
         assert!(!again.remove("https://isene.org").unwrap());
+        let _ = std::fs::remove_dir_all(b.path.parent().unwrap());
+    }
+
+    #[test]
+    fn ticked_bookmarks_go_and_the_rest_stay_in_order() {
+        let mut b = fresh("many");
+        for u in ["https://a.no/", "https://b.no/", "https://c.no/", "https://d.no/"] { b.add(u, "").unwrap(); }
+        let gone = b.remove_all(&["https://b.no/".into(), "https://d.no/".into(), "https://x.no/".into()]).unwrap();
+        assert_eq!(gone, 2);
+        let urls: Vec<String> = Bookmarks::load(b.path.clone()).list().iter().map(|x| x.url.clone()).collect();
+        assert_eq!(urls, ["https://a.no/", "https://c.no/"]);
         let _ = std::fs::remove_dir_all(b.path.parent().unwrap());
     }
 

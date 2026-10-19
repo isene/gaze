@@ -2507,6 +2507,19 @@ fn on_message(shared: &Shared, id: u64, text: &str) {
             };
             offer_save(shared, login);
         }
+        "bookmarks-del" => {
+            if v.get("key").and_then(|k| k.as_str()) != Some(page_key()) { return; }
+            let urls: Vec<String> = v.get("urls").and_then(|u| u.as_array()).map(|a| {
+                a.iter().filter_map(|u| u.as_str().map(String::from)).collect()
+            }).unwrap_or_default();
+            let r = shared.borrow_mut().marks.remove_all(&urls);
+            match r {
+                Ok(n) => set_message(shared, &format!("{} bookmark{} removed", n, if n == 1 { "" } else { "s" })),
+                Err(e) => set_message(shared, &format!("Bookmarks: {}", e)),
+            }
+            let view = shared.borrow().views.get(&id).cloned();
+            if let Some(view) = view { view.reload(); }
+        }
         _ => {}
     }
 }
@@ -2675,7 +2688,8 @@ fn bookmarks_page() -> String {
         a.marks.refresh();
         a.marks.list().iter().map(|b| {
             let title = if b.title.is_empty() { b.url.clone() } else { b.title.clone() };
-            format!("<tr><td><a href=\"{}\">{}</a></td><td class=u>{}</td></tr>", esc(&b.url), esc(&title), esc(&b.url))
+            format!("<tr><td><input type=checkbox data-u=\"{0}\"></td><td><a href=\"{0}\">{1}</a></td><td class=u>{0}</td></tr>",
+                    esc(&b.url), esc(&title))
         }).collect::<String>()
     }).unwrap_or_default();
     if rows.is_empty() {
@@ -2684,7 +2698,31 @@ fn bookmarks_page() -> String {
     }
     format!("<h1>Bookmarks</h1><p><kbd>f</kbd> then the letters opens one. <kbd>M</kbd> adds the current page, \
              <code>:bookmark-del</code> removes it. The list is <code>~/.gaze/sync/bookmarks</code>, a text file.</p>\
-             <table>{}</table>", rows)
+             <p><label><input type=checkbox id=all> Mark all</label> <button id=del disabled>Delete marked</button></p>\
+             <table>{}</table><script>{}</script>", rows, BOOKMARKS_JS.replace("KEY", page_key()))
+}
+
+/// Tick boxes on gaze://bookmarks. The key in the message shows gaze the
+/// page is its own: a web site could post the same message, but it
+/// cannot read a gaze:// page to learn the key.
+const BOOKMARKS_JS: &str = "const boxes=[...document.querySelectorAll('input[data-u]')];\
+ const all=document.getElementById('all'),del=document.getElementById('del');\
+ const marked=()=>boxes.filter(b=>b.checked);\
+ const sync=()=>{const n=marked().length;del.disabled=!n;del.textContent=n?'Delete '+n+' marked':'Delete marked';\
+ all.checked=n===boxes.length;all.indeterminate=n>0&&n<boxes.length;};\
+ all.onchange=()=>{boxes.forEach(b=>b.checked=all.checked);sync();};\
+ boxes.forEach(b=>b.onchange=sync);\
+ del.onclick=()=>window.webkit.messageHandlers.gaze.postMessage(JSON.stringify({t:'bookmarks-del',key:'KEY',urls:marked().map(b=>b.dataset.u)}));";
+
+/// A random key made once a run, for messages from gaze's own pages.
+fn page_key() -> &'static str {
+    static KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| {
+        use chacha20poly1305::aead::{rand_core::RngCore, OsRng};
+        let mut b = [0u8; 16];
+        OsRng.fill_bytes(&mut b);
+        b.iter().map(|x| format!("{:02x}", x)).collect()
+    })
 }
 
 /// Every command, grouped, for the help page. Keys come from the keymap.
@@ -2724,9 +2762,9 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Tab groups", "group-rename <name>", ""), ("Tab groups", "group-color <colour>", "blue red yellow green pink purple orange cyan gray, or #rrggbb"),
     ("Tab groups", "group-close", "close every tab of the group"), ("Tab groups", "group-delete [name]", "drop an empty group"),
     ("Tab groups", "groups", "list the groups"),
-    ("Bookmarks", "bookmark-add [title]", "bookmark this page"), ("Bookmarks", "bookmark-del [url]", "forget this page's bookmark"),
+    ("Bookmarks", "bookmark-add [title]", "bookmark this page, under the title given or its own"), ("Bookmarks", "bookmark-del [url]", "forget this page's bookmark"),
     ("Tabs", "send", "open this page in gaze on the phone"),
-    ("Bookmarks", "bookmarks", "the list, at gaze://bookmarks"), ("Bookmarks", "bookmark-import <file>", "read a Firefox HTML export"),
+    ("Bookmarks", "bookmarks", "the list, at gaze://bookmarks; tick boxes there to delete"), ("Bookmarks", "bookmark-import <file>", "read a Firefox HTML export"),
     ("Passwords", "fill", "fill the login form; again for the next saved login of the site"),
     ("Passwords", "passwords", "list the sites and usernames"), ("Passwords", "password-import <csv>", "read the CSV Firefox writes from about:logins → Export, then delete it"),
     ("Passwords", "password-remove <username>", "forget one login for this site"), ("Passwords", "password-lock", "lock the store for this session"),
