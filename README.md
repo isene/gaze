@@ -29,7 +29,7 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 | `i`, `gi` | Insert mode (type into the page) / focus the first field. A click on a field enters it too; `Tab` moves to the next field; `Esc` leaves |
 | `Ctrl-g` | In a text field: its text opens in your editor, in a new terminal window, and comes back into the field when you close it (`editor` in the config, `scribe` unless you change it; never a password field) |
 | `yy`, `pp` / `PP` | Copy the URL; open what the clipboard holds here / in a new tab |
-| `t`, `d`, `u` | New tab, close tab, bring back the last closed |
+| `t`, `d`, `u` | New tab, close tab, bring back the last closed, with its back and forward history |
 | `T` | New private tab (see Private tabs) |
 | `Left` / `Right`, `J` / `K`, `Alt-1`…`Alt-9` | Previous / next tab, tab by number |
 | `Shift-Left` / `Shift-Right` | Move the tab left / right |

@@ -23,7 +23,7 @@ use webkit6::{
     AuthenticationRequest, AutoplayPolicy, CookieAcceptPolicy, CookiePersistentStorage, Credential, CredentialPersistence, Download, FindOptions, LoadEvent,
     NavigationPolicyDecision, NetworkSession, PolicyDecisionType, ResponsePolicyDecision, Settings,
     URISchemeRequest, UserContentFilter, UserContentFilterStore, UserContentInjectedFrames,
-    UserContentManager, UserScript, UserScriptInjectionTime, WebContext, WebView, WebsitePolicies,
+    UserContentManager, UserScript, UserScriptInjectionTime, WebContext, WebView, WebViewSessionState, WebsitePolicies,
 };
 
 use passwords::{Change, Login, Store};
@@ -78,8 +78,8 @@ struct App {
     /// Tabs whose next login box goes to WebKit at once, master password
     /// or not.
     typed: HashSet<u64>,
-    /// Closed tabs, newest last: uri and group name.
-    closed: Vec<(String, Option<String>)>,
+    /// Closed tabs, newest last: uri, group name, and the back and forward history.
+    closed: Vec<(String, Option<String>, Option<WebViewSessionState>)>,
     /// The video page last handed to the player, for `video-page`.
     last_video: String,
     find: String,
@@ -1448,6 +1448,11 @@ fn open_tab_as(shared: &Shared, uri: &str, background: bool, private: bool) -> u
 
 /// Open a tab on the address as it is: a video page is shown, not played.
 fn open_page(shared: &Shared, uri: &str, background: bool, private: bool) -> u64 {
+    open_page_with(shared, uri, background, private, None)
+}
+
+/// Open a tab with the back and forward history a closed tab had.
+fn open_page_with(shared: &Shared, uri: &str, background: bool, private: bool, history: Option<&WebViewSessionState>) -> u64 {
     let id = {
         let mut a = shared.borrow_mut();
         let id = a.tabs.open(uri, background);
@@ -1455,7 +1460,15 @@ fn open_page(shared: &Shared, uri: &str, background: bool, private: bool) -> u64
         id
     };
     let view = make_view(shared, id, None);
-    view.load_uri(uri);
+    // The history comes back first, then the page it was on is loaded.
+    let item = history.and_then(|h| {
+        view.restore_session_state(h);
+        view.back_forward_list().and_then(|l| l.current_item())
+    });
+    match item {
+        Some(item) => view.go_to_back_forward_list_item(&item),
+        None => view.load_uri(uri),
+    }
     attach(shared, id, view);
     if background { refresh(shared); } else { show_active(shared); }
     if !private { save_session(shared); }
@@ -1552,7 +1565,10 @@ fn close_tab(shared: &Shared, idx: usize) {
         let group = tab.group.and_then(|g| a.tabs.group_by_id(g)).map(|g| g.name.clone());
         // A closed private tab is forgotten: u does not bring it back. With
         // the last one goes the private session, cookies and all.
-        if tab.uri != "about:blank" && !tab.private { a.closed.push((tab.uri.clone(), group)); }
+        if tab.uri != "about:blank" && !tab.private {
+            let history = a.views.get(&tab.id).and_then(|v| v.session_state());
+            a.closed.push((tab.uri.clone(), group, history));
+        }
         if a.closed.len() > 50 { a.closed.remove(0); }
         if tab.private && !a.tabs.tabs.iter().any(|t| t.private) { a.private_session = None; }
         a.fill_at.remove(&tab.id);
@@ -1636,12 +1652,12 @@ fn web_processes() -> Vec<i32> {
 }
 
 fn undo_close(shared: &Shared) {
-    let Some((uri, group)) = shared.borrow_mut().closed.pop() else {
+    let Some((uri, group, history)) = shared.borrow_mut().closed.pop() else {
         set_message(shared, "Nothing to undo");
         return;
     };
     // The closed tab showed a page, so a video page comes back as a page.
-    open_page(shared, &uri, false, false);
+    open_page_with(shared, &uri, false, false, history.as_ref());
     if let Some(name) = group {
         let idx = shared.borrow().tabs.active;
         shared.borrow_mut().tabs.set_group(idx, &name);
@@ -2775,7 +2791,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Tabs", "tab-next", "the next visible tab"), ("Tabs", "tab-prev", "the previous one"),
     ("Tabs", "tab <n>", "the n-th visible tab"), ("Tabs", "tab-first", ""), ("Tabs", "tab-last", ""),
     ("Tabs", "mute [n]", "sound off or on for this tab, or for the n-th; ♪ marks a tab that plays, ♪✕ one that is off"),
-    ("Tabs", "tab-move +1|-1|<n>", "move this tab"), ("Tabs", "close", "close this tab"), ("Tabs", "undo", "bring back the last closed tab"),
+    ("Tabs", "tab-move +1|-1|<n>", "move this tab"), ("Tabs", "close", "close this tab"), ("Tabs", "undo", "bring back the last closed tab, with its history"),
     ("Tab groups", "group [name]", "put this tab in the group, made on the spot when new; asks for the name when given none"),
     ("Tab groups", "ungroup", "take it out again"),
     ("Tab groups", "group-fold", "fold this tab's group away"), ("Tab groups", "group-unfold", ""), ("Tab groups", "group-toggle", ""),

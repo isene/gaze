@@ -1,8 +1,8 @@
 #!/bin/bash
 # End-to-end test of what gaze does with a page: the reader view, saving
 # a PDF, saving the page as HTML, search engines by keyword, the mark on
-# a tab that plays sound, and a video page: handed to the player, or shown
-# as a page for its comments.
+# a tab that plays sound, a video page (handed to the player, or shown
+# as a page for its comments), and a closed tab brought back with its history.
 #
 # It runs the release build in its own X server (Xvfb), its own D-Bus
 # session and a throwaway HOME. Your running gaze and your ~/.gaze are
@@ -273,7 +273,8 @@ start "a video page" "$URL/videos" "videos" && {
     check "and the player is not started again" [ "$(wc -l < "$PLAYED")" = 1 ]
     shot video-page
     xdotool key d; sleep 0.5; xdotool key u
-    check "the closed page comes back as a page" wait_for asked_times 2 "/watch?v=one"
+    # It comes back with its history, from the cache: the title shows it.
+    check "the closed page comes back as a page" wait_for title_is clip
     check "with the player still left alone" [ "$(wc -l < "$PLAYED")" = 1 ]
 }; stop
 
@@ -287,6 +288,17 @@ start "a link to a comment" "$URL/comment" "comment" && {
     check "a link to one comment opens in gaze" wait_for asked "/watch?v=two&lc=abc"
     sleep 1
     check "and the player is left alone" not test -s "$PLAYED"
+}; stop
+
+start "a closed tab keeps its history" "$URL/article" "The Article" && {
+    xdotool key f; sleep 0.7; xdotool key a
+    wait_for title_is next
+    xdotool key d; sleep 1; xdotool key u
+    check "u brings the tab back on its page" wait_for title_is next
+    xdotool key H
+    check "and back goes to the page before it" wait_for title_is "The Article"
+    xdotool key L
+    check "and forward again" wait_for title_is next
 }; stop
 
 if [ $FAILED = 0 ]; then echo "all passed"; else echo "$FAILED failed"; fi
