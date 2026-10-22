@@ -1091,6 +1091,20 @@ fn js_str(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
 }
 
+/// True once a new build has replaced the program file this copy runs
+/// from: Linux then marks the running copy " (deleted)". One readlink
+/// per bar draw until it fires, none after.
+fn rebuilt() -> bool {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static OLD: AtomicBool = AtomicBool::new(false);
+    if OLD.load(Ordering::Relaxed) { return true; }
+    let old = std::fs::read_link("/proc/self/exe")
+        .map(|p| p.to_string_lossy().ends_with(" (deleted)"))
+        .unwrap_or(false);
+    if old { OLD.store(true, Ordering::Relaxed); }
+    old
+}
+
 fn refresh(shared: &Shared) {
     let (bar, left, right, title) = {
         let a = shared.borrow();
@@ -1102,7 +1116,13 @@ fn refresh(shared: &Shared) {
             _ => "",
         };
         let keys = if a.keys.is_empty() { String::new() } else { format!("   <b>{}</b>", glib::markup_escape_text(&a.keys)) };
-        let left = format!("{}{}{}", mode, glib::markup_escape_text(&a.message), keys);
+        // The version shows only on the start page, so the bar says it here.
+        let old = if rebuilt() {
+            format!("<span foreground=\"#ff8700\"><b>gaze v{} is old: restart</b></span>   ", env!("CARGO_PKG_VERSION"))
+        } else {
+            String::new()
+        };
+        let left = format!("{}{}{}{}", old, mode, glib::markup_escape_text(&a.message), keys);
         let uri = a.tabs.current().map(|t| t.uri.clone()).unwrap_or_default();
         let progress = current_view(&a).map(|v| v.estimated_load_progress()).unwrap_or(1.0);
         let right = if !a.hover.is_empty() {
