@@ -41,6 +41,13 @@ pub const PAGE: &str = r#"
     return null;
   };
   const passwordFields = () => [...document.querySelectorAll('input[type=password]')].filter(visible);
+  // The account a sign-in step is for, even with no username field in
+  // sight: Google's password page keeps it in a hidden field.
+  const hintedUser = () => {
+    const el = [...document.querySelectorAll('input[autocomplete~="username" i], input[type=email], input[name="identifier" i]')]
+      .find(i => i.value && (i.type || '').toLowerCase() !== 'password');
+    return el ? el.value : '';
+  };
 
   const G = window.__gaze = {
     // ---- insert mode follows the focus ----
@@ -100,10 +107,16 @@ pub const PAGE: &str = r#"
     captureLogins() {
       const remember = () => {
         const pws = passwordFields().filter(p => p.value);
-        if (!pws.length) return;
+        if (!pws.length) {
+          // A first step that asks for the account alone; the password
+          // page after it is for this account.
+          const u = hintedUser();
+          if (u) post({ t: 'user', origin: location.origin, username: u });
+          return;
+        }
         const pw = pws[0];
         const u = userField(pw);
-        post({ t: 'login', origin: location.origin, username: u ? u.value : '', password: pw.value });
+        post({ t: 'login', origin: location.origin, username: u ? u.value : hintedUser(), password: pw.value });
       };
       document.addEventListener('submit', remember, true);
       document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target && e.target.type === 'password') remember(); }, true);
@@ -111,6 +124,11 @@ pub const PAGE: &str = r#"
         const b = e.target && e.target.closest && e.target.closest('button, input[type=submit], [role=button]');
         if (b) remember();
       }, true);
+    },
+    pageUser() {
+      const pw = passwordFields()[0];
+      const u = pw && userField(pw);
+      return (u && u.value) || hintedUser();
     },
     fill(u, p) {
       const pws = passwordFields();

@@ -73,6 +73,9 @@ struct App {
     store: Store,
     /// Which of a site's logins was filled last, per tab.
     fill_at: HashMap<u64, usize>,
+    /// The account given on a site's first sign-in step, per tab, as
+    /// (site, username): the password page after it is for that account.
+    users: HashMap<u64, (String, String)>,
     /// WebKit's own login box, per tab that shows one: the keys are its.
     login_boxes: HashMap<u64, AuthenticationRequest>,
     /// Tabs whose next login box goes to WebKit at once, master password
@@ -374,7 +377,7 @@ fn build(app: &gtk::Application) -> Shared {
         ui: Ui { window: window.clone(), tabbar, stack, bottom, status, right, entry: entry.clone(), completion },
         cfg, tabs, views: HashMap::new(), session, private_session: None, settings,
         mode: Mode::Normal, keys: String::new(), ask: Ask::Command, prompt: None,
-        message: String::new(), hover: String::new(), store, fill_at: HashMap::new(), login_boxes: HashMap::new(), typed: HashSet::new(),
+        message: String::new(), hover: String::new(), store, fill_at: HashMap::new(), users: HashMap::new(), login_boxes: HashMap::new(), typed: HashSet::new(),
         closed: Vec::new(), last_video: String::new(), find: String::new(), session_path, save_pending: false,
         keymap, marks, dark_sites, mic_sites, hist, tab_watch: None, offers: Vec::new(), selected: None, setting_text: false, filter: None,
     }));
@@ -1595,6 +1598,7 @@ fn close_tab(shared: &Shared, idx: usize) {
         if a.closed.len() > 50 { a.closed.remove(0); }
         if tab.private && !a.tabs.tabs.iter().any(|t| t.private) { a.private_session = None; }
         a.fill_at.remove(&tab.id);
+        a.users.remove(&tab.id);
         a.login_boxes.remove(&tab.id);
         a.typed.remove(&tab.id);
         (a.views.remove(&tab.id), a.cfg.home.clone())
@@ -2492,17 +2496,34 @@ fn fill_next(shared: &Shared, first: bool) {
         set_message(shared, &format!("No saved login for {}", passwords::site_key(&uri)));
         return;
     }
-    let idx = {
-        let mut a = shared.borrow_mut();
-        let last = a.fill_at.get(&id).copied();
-        let idx = if first || last.is_none() { 0 } else { (last.unwrap() + 1) % logins.len() };
-        a.fill_at.insert(id, idx);
-        idx
-    };
+    let last = shared.borrow().fill_at.get(&id).copied();
+    if let (false, Some(last)) = (first, last) {
+        fill_with(shared, &view, id, logins, last + 1);
+        return;
+    }
+    // The first fill takes the account the page names, or the one given
+    // on the step before, so each of several accounts gets its own password.
+    let s = shared.clone();
+    let v = view.clone();
+    run_js_then(&view, "window.__gaze ? window.__gaze.pageUser() : ''", move |r| {
+        let mut user = r.map(|r| r.to_str().to_string()).unwrap_or_default();
+        if user.is_empty() {
+            let site = passwords::site_key(&uri);
+            user = s.borrow().users.get(&id).filter(|(at, _)| *at == site).map(|(_, u)| u.clone()).unwrap_or_default();
+        }
+        let idx = logins.iter().position(|l| !user.is_empty() && l.username.eq_ignore_ascii_case(&user)).unwrap_or(0);
+        fill_with(&s, &v, id, logins, idx);
+    });
+}
+
+/// Fill login `idx` (counted round) of the site's `logins` into the page.
+fn fill_with(shared: &Shared, view: &WebView, id: u64, logins: Vec<Login>, idx: usize) {
+    let idx = idx % logins.len();
+    shared.borrow_mut().fill_at.insert(id, idx);
     let login = logins[idx].clone();
     let s = shared.clone();
     let code = format!("window.__gaze ? window.__gaze.fill({}, {}) : 'none'", js_str(&login.username), js_str(&login.password));
-    run_js_then(&view, &code, move |v| {
+    run_js_then(view, &code, move |v| {
         let r = v.map(|v| v.to_str().to_string()).unwrap_or_default();
         let more = if logins.len() > 1 { format!(" ({} of {}, gp for the next)", idx + 1, logins.len()) } else { String::new() };
         match r.as_str() {
@@ -2547,15 +2568,26 @@ fn on_message(shared: &Shared, id: u64, text: &str) {
             let private = shared.borrow().tabs.is_private(id);
             if !uri.is_empty() { open_tab_as(shared, &uri, background, private); }
         }
+        "user" => {
+            if shared.borrow().tabs.is_private(id) { return; }
+            let field = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+            shared.borrow_mut().users.insert(id, (passwords::site_key(&field("origin")), field("username")));
+        }
         "login" => {
             // Nothing from a private tab is offered for saving.
             if shared.borrow().tabs.is_private(id) { return; }
-            let login = Login {
+            let mut login = Login {
                 origin: v.get("origin").and_then(|s| s.as_str()).unwrap_or("").to_string(),
                 username: v.get("username").and_then(|s| s.as_str()).unwrap_or("").to_string(),
                 password: v.get("password").and_then(|s| s.as_str()).unwrap_or("").to_string(),
                 used: 0,
             };
+            // A password page with no account on it: the account given
+            // on the step before, as Google asks for them one at a time.
+            if login.username.is_empty() {
+                let site = passwords::site_key(&login.origin);
+                if let Some((_, u)) = shared.borrow().users.get(&id).filter(|(at, _)| *at == site) { login.username = u.clone(); }
+            }
             offer_save(shared, login);
         }
         "bookmark-name" => {
