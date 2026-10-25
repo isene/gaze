@@ -335,6 +335,9 @@ fn build(app: &gtk::Application) -> Shared {
     status.set_hexpand(true);
     status.set_use_markup(true);
     status.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    // The mouse can select the message to copy it; the page keeps the keys.
+    status.set_selectable(true);
+    status.set_focus_on_click(false);
     let right = gtk::Label::new(None);
     right.set_xalign(1.0);
     right.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
@@ -1777,7 +1780,19 @@ fn on_key(shared: &Shared, key: gdk::Key, state: gdk::ModifierType) -> glib::Pro
             }
             Stop
         }
-        Mode::Normal => { normal_key(shared, key, state); Stop }
+        Mode::Normal => {
+            // Ctrl-c copies what the mouse selected in the status bar.
+            if ctrl && ch == Some('c') {
+                let a = shared.borrow();
+                if let Some((s, e)) = a.ui.status.selection_bounds() {
+                    let text: String = a.ui.status.text().chars().skip(s.min(e) as usize).take(s.abs_diff(e) as usize).collect();
+                    clipboard().set_text(&text);
+                    return Stop;
+                }
+            }
+            normal_key(shared, key, state);
+            Stop
+        }
     }
 }
 

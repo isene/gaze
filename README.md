@@ -200,6 +200,8 @@ Runtime: WebKitGTK 6.0 and GTK 4. Pages are painted on the graphics chip built i
 
 Once a new build replaces the program, the status bar says in orange that this gaze is old and should be restarted.
 
+The message at the bottom left can be selected with the mouse. Ctrl-c copies the selection, and a middle click pastes it, as with any selected text.
+
 ## Files
 
 - `~/.gaze/config.yml`: the settings. Home page, search engines, download folder, paper size, zoom and scroll step. Ad blocking, dark pages, text size of the bars (`font_size`, in pixels) and standing groups.
