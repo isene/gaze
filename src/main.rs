@@ -2910,7 +2910,7 @@ fn help_page() -> String {
 <p class=tag>Looking out onto the web. A keyboard-driven browser in Rust, around WebKitGTK.</p>
 <p class=links><a href="https://github.com/isene/gaze">Repository</a> <a href="https://github.com/isene/gaze#readme">README</a>
 <a href="https://github.com/isene/gaze/releases">Releases</a> <a href="https://github.com/isene/gaze/issues">Issues</a>
-<a href="https://isene.github.io/fe2o3/">Fe₂O₃ suite</a> <a href="https://isene.org">isene.org</a>
+<a href="https://isene.org/fe2o3/">Fe₂O₃ suite</a> <a href="https://isene.org">isene.org</a>
 <a href="gaze://bookmarks">gaze://bookmarks</a> <a href="gaze://passwords">gaze://passwords</a></p>
 </div></header>
 <div class=modes>
