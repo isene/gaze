@@ -7,7 +7,8 @@ use std::path::PathBuf;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Config {
-    /// Page for a fresh start and `:home`.
+    /// Page for a fresh start and `:home`. gaze://home lists the pages
+    /// visited most and the bookmarks used most.
     pub home: String,
     /// Search URL; `%s` is what you typed.
     pub search: String,
@@ -58,7 +59,7 @@ pub struct GroupSpec {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            home: "https://duckduckgo.com".into(),
+            home: "gaze://home".into(),
             search: "https://duckduckgo.com/?q=%s".into(),
             engines: [
                 ("w", "https://en.wikipedia.org/wiki/Special:Search?search=%s"),
@@ -85,7 +86,9 @@ impl Default for Config {
 
 const TEMPLATE: &str = "\
 # gaze configuration
-home: https://duckduckgo.com
+# The page for a fresh start and :home. gaze://home lists the pages you
+# visit most and the bookmarks you use most; any address will do instead.
+home: gaze://home
 search: https://duckduckgo.com/?q=%s
 # More search engines, by keyword: \"w rust\" searches Wikipedia for rust.
 # The keyword is the first word you type, %s is the rest. Leave these three

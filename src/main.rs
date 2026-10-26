@@ -2728,6 +2728,7 @@ fn serve_internal(req: &URISchemeRequest) {
     let uri = req.uri().map(|u| u.to_string()).unwrap_or_default();
     let name = uri.trim_start_matches("gaze:").trim_matches('/').to_string();
     let body = match name.as_str() {
+        "home" => home_page(),
         "help" => help_page(),
         "passwords" => passwords_page(),
         "bookmarks" => bookmarks_page(),
@@ -2774,10 +2775,44 @@ const PAGE_CSS: &str = "body{background:#1e1e1e;color:#d0d0d0;font:15px/1.5 sans
  .mode b{color:#e0b93a;display:block;margin-bottom:.15em}\
  .cards{display:grid;grid-template-columns:1fr 1fr;gap:0 1.4em;align-items:start}.card{background:#242424;border-radius:8px;padding:.1em 1.1em .7em;margin-bottom:1.4em}\
  .card h2{margin:.7em 0 .3em;font-size:1.15em}.card td{font-size:14px;padding:2px 12px 2px 0}.card .k span{display:inline-block;max-width:15em}.card code,.card kbd{white-space:nowrap}\
+ .tiles{list-style:none;padding:0;margin:.3em 0}.tiles li{margin:0 0 .55em}.tiles a{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\
  .more{display:grid;grid-template-columns:1fr 1fr;gap:0 2.5em;align-items:start;margin-top:1em}.more h2{margin-top:1em}.more p{margin-top:.3em}";
 
 /// The logo, drawn into the help page.
 const LOGO: &str = include_str!("../img/gaze.svg");
+
+/// How many pages each list on gaze://home shows.
+const HOME_LIST: usize = 12;
+
+fn home_page() -> String {
+    let (top, used) = with_app(|s| {
+        let mut a = s.borrow_mut();
+        a.marks.refresh();
+        let marks: Vec<(String, String)> = a.marks.list().iter().map(|b| (b.url.clone(), b.title.clone())).collect();
+        let top: Vec<(String, String)> = a.hist.top(&marks, HOME_LIST).into_iter().map(|v| (v.url, v.title)).collect();
+        (top, a.hist.most_used(&marks, HOME_LIST))
+    }).unwrap_or_default();
+    home_html(&top, &used)
+}
+
+/// gaze://home: the pages visited most of late, the bookmarks used most,
+/// and the way to the keys.
+fn home_html(top: &[(String, String)], marks: &[(String, String)]) -> String {
+    let list = |items: &[(String, String)], none: &str| {
+        if items.is_empty() { return format!("<p class=u>{}</p>", none); }
+        let rows = items.iter().map(|(u, t)| {
+            let name = if t.is_empty() { u.as_str() } else { t.as_str() };
+            format!("<li><a href=\"{}\">{}</a><span class=u>{}</span></li>", esc(u), esc(name), esc(&site_key(u)))
+        }).collect::<String>();
+        format!("<ul class=tiles>{}</ul>", rows)
+    };
+    format!("<body class=help><h1>gaze</h1><div class=more><div><h2>Most visited</h2>{}</div>\
+             <div><h2>Bookmarks</h2>{}</div></div>\
+             <p class=links><a href=\"gaze://help\">Keys and help</a> <a href=\"gaze://bookmarks\">All bookmarks</a></p>\
+             <p class=u><kbd>o</kbd> opens a page or a search. Another home page: <code>home:</code> in <code>~/.gaze/config.yml</code>.</p>",
+            list(top, "The pages you visit most show here."),
+            list(marks, "<kbd>M</kbd> bookmarks the page you are on."))
+}
 
 fn bookmarks_page() -> String {
     let rows = with_app(|s| {
@@ -2837,7 +2872,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Open and go", "cmd <text>", "open the command line with this text; {url} and {title} are filled in"),
     ("Open and go", "back", "go back"), ("Open and go", "forward", "go forward"),
     ("Open and go", "reload", "reload"), ("Open and go", "reload-force", "reload without the cache"), ("Open and go", "stop", "stop loading"),
-    ("Open and go", "home", "the home page from config.yml"),
+    ("Open and go", "home", "the home page: gaze://home, or the one config.yml names"),
     ("On the page", "hint", "type the letters on a link to follow it"), ("On the page", "hint-tab", "the same, into a background tab"),
     ("On the page", "insert", "insert mode: keys go to the page until Esc"), ("On the page", "focus-input", "focus the first field on the page"),
     ("On the page", "edit-text", "the focused field's text in your editor, back in the field when you close it; Ctrl-g in insert mode"),
@@ -2911,7 +2946,7 @@ fn help_page() -> String {
 <p class=links><a href="https://github.com/isene/gaze">Repository</a> <a href="https://github.com/isene/gaze#readme">README</a>
 <a href="https://github.com/isene/gaze/releases">Releases</a> <a href="https://github.com/isene/gaze/issues">Issues</a>
 <a href="https://isene.org/fe2o3/">Fe₂O₃ suite</a> <a href="https://isene.org">isene.org</a>
-<a href="gaze://bookmarks">gaze://bookmarks</a> <a href="gaze://passwords">gaze://passwords</a></p>
+<a href="gaze://home">gaze://home</a> <a href="gaze://bookmarks">gaze://bookmarks</a> <a href="gaze://passwords">gaze://passwords</a></p>
 </div></header>
 <div class=modes>
 <div class=mode><b>Normal</b>Keys run the commands below. <kbd>Esc</kbd> always comes back here.</div>
@@ -2960,7 +2995,15 @@ paper size (<code>paper: a4</code>), zoom, scroll step, ad blocking, text size o
 
 #[cfg(test)]
 mod tests {
-    use super::{free_path, page_name, paper_name, picked, saved, tabbar_markup, Tabs};
+    use super::{free_path, home_html, page_name, paper_name, picked, saved, tabbar_markup, Tabs};
+
+    #[test]
+    fn the_home_page_escapes_titles_and_says_what_is_empty() {
+        let page = home_html(&[("https://a.example/?x=1&y=2".into(), "<b>A</b>".into())], &[]);
+        assert!(page.contains("&lt;b&gt;A&lt;/b&gt;") && page.contains("x=1&amp;y=2"));
+        assert!(page.contains(">a.example<") && page.contains("gaze://help"));
+        assert!(page.contains("bookmarks the page you are on"));
+    }
 
     fn pdf_name(title: &str, uri: &str) -> String { page_name(title, uri, "pdf") }
 

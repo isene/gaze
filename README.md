@@ -96,6 +96,8 @@ Both sides read a changed file again before they write it. A login saved on the 
 
 `M` bookmarks the page under its title, and `:bookmark-add <title>` gives it a name of your own. `gb` shows the list, where `f` and the letters open one. Tick the boxes there (or Mark all) and press Delete marked to remove them, or press ✎ beside one to rename it; `:bookmark-del` forgets the current page. `:bookmark-import ~/bookmarks.html` reads the file Firefox writes from Manage Bookmarks → Import and Backup → Export Bookmarks to HTML. The list is `~/.gaze/sync/bookmarks`, one URL, a tab and a title per line.
 
+The home page, `gaze://home`, lists twelve pages you visited most in the last 30 days and twelve bookmarks you use most. It links to the keys too. It opens at a fresh start, after the last tab closes and on `:home`. `home:` in config.yml names another page instead. The home page was Aleksander's idea.
+
 ## Ad blocking
 
 On by default; `adblock: false` in the config turns it off. The first start fetches [Steven Black's hosts list](https://github.com/StevenBlack/hosts) to `~/.gaze/adblock/hosts` and compiles it into a WebKit content filter, which takes a few seconds once. Every domain on the list is then blocked for every request. `:adblock-update` fetches the list again.

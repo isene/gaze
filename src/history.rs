@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 const KEEP: usize = 5000;
 const REWRITE_AT: usize = 10_000;
+const MONTH: u64 = 30 * 24 * 3600;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Visit {
@@ -113,6 +114,26 @@ impl History {
         out.into_iter().take(limit).map(|(_, c)| c).collect()
     }
 
+    /// For the home page: the pages visited most among those seen in the
+    /// last month. Bookmarks are left out, as they have a list of their own.
+    pub fn top(&self, bookmarks: &[(String, String)], limit: usize) -> Vec<Visit> {
+        let since = now().saturating_sub(MONTH);
+        let mut out: Vec<&Visit> = self.visits.iter()
+            .filter(|v| v.last >= since && !bookmarks.iter().any(|(u, _)| *u == v.url))
+            .collect();
+        out.sort_by(|a, b| b.count.cmp(&a.count).then(b.last.cmp(&a.last)));
+        out.into_iter().take(limit).cloned().collect()
+    }
+
+    /// The bookmarks visited most, most first. Those never visited keep
+    /// the order of the file.
+    pub fn most_used(&self, bookmarks: &[(String, String)], limit: usize) -> Vec<(String, String)> {
+        let counts: HashMap<&str, u32> = self.visits.iter().map(|v| (v.url.as_str(), v.count)).collect();
+        let mut out: Vec<&(String, String)> = bookmarks.iter().collect();
+        out.sort_by_key(|b| std::cmp::Reverse(counts.get(b.0.as_str()).copied().unwrap_or(0)));
+        out.into_iter().take(limit).cloned().collect()
+    }
+
     fn rewrite(&self) -> Result<(), String> {
         let mut text = String::new();
         for v in self.visits.iter().rev() {
@@ -168,6 +189,24 @@ mod tests {
         assert_eq!(h.matches("blog nothing", &marks, 10).len(), 0);
         let latest = h.matches("", &[], 10);
         assert_eq!(latest[0].url, "https://example.com/free-will", "an empty query lists the latest first");
+        let _ = std::fs::remove_dir_all(h.path.parent().unwrap());
+    }
+
+    #[test]
+    fn the_home_page_lists_the_most_visited_and_the_most_used_bookmarks() {
+        let mut h = fresh("home");
+        for _ in 0..3 { h.record("https://isene.org/", "Geir"); }
+        h.record("https://example.com/", "Example");
+        for _ in 0..2 { h.record("https://plato.stanford.edu/", "Stanford"); }
+        h.visits.push(Visit { url: "https://old.example/".into(), title: "Old".into(), last: now() - 2 * MONTH, count: 99 });
+        let marks = vec![
+            ("https://never.example/".to_string(), "Never".to_string()),
+            ("https://plato.stanford.edu/".to_string(), "Stanford".to_string()),
+        ];
+        let top: Vec<String> = h.top(&marks, 10).into_iter().map(|v| v.url).collect();
+        assert_eq!(top, ["https://isene.org/", "https://example.com/"], "most visited first, no bookmark, nothing old");
+        assert_eq!(h.most_used(&marks, 10)[0].0, "https://plato.stanford.edu/");
+        assert_eq!(h.most_used(&marks, 1).len(), 1);
         let _ = std::fs::remove_dir_all(h.path.parent().unwrap());
     }
 
