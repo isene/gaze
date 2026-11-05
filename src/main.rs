@@ -104,6 +104,10 @@ struct App {
     setting_text: bool,
     /// The compiled ad blocker, once it is ready.
     filter: Option<UserContentFilter>,
+    /// Web processes stopped while the window is off screen, and the stop
+    /// that waits to happen.
+    frozen: Vec<i32>,
+    freeze_timer: Option<glib::SourceId>,
 }
 
 type Shared = Rc<RefCell<App>>;
@@ -380,6 +384,7 @@ fn build(app: &gtk::Application) -> Shared {
         message: String::new(), hover: String::new(), store, fill_at: HashMap::new(), users: HashMap::new(), login_boxes: HashMap::new(), typed: HashSet::new(),
         closed: Vec::new(), last_video: String::new(), find: String::new(), session_path, save_pending: false,
         keymap, marks, dark_sites, mic_sites, hist, tab_watch: None, offers: Vec::new(), selected: None, setting_text: false, filter: None,
+        frozen: Vec::new(), freeze_timer: None,
     }));
 
     let keys = gtk::EventControllerKey::new();
@@ -399,7 +404,17 @@ fn build(app: &gtk::Application) -> Shared {
     }
     {
         let s = shared.clone();
-        window.connect_close_request(move |_| { save_session(&s); glib::Propagation::Proceed });
+        window.connect_close_request(move |_| { save_session(&s); thaw(&s); glib::Propagation::Proceed });
+    }
+    {
+        // tile unmaps the window on another workspace, and GTK, with no
+        // hidden state from the window manager, calls that minimized.
+        let s = shared.clone();
+        window.connect_realize(move |w| {
+            let Some(top) = w.surface().and_then(|sf| sf.downcast::<gdk::Toplevel>().ok()) else { return };
+            let s = s.clone();
+            top.connect_state_notify(move |t| on_screen(&s, !t.state().contains(gdk::ToplevelState::MINIMIZED)));
+        });
     }
 
     // Bring the last session back. Only the current tab loads now; the
@@ -639,6 +654,10 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
             }
             debug(if v.is_playing_audio() { "a tab plays sound" } else { "a tab went quiet" });
             refresh(&s);
+            // Off screen and quiet now: the stop the sound held back waits again.
+            let hidden = s.borrow().ui.window.surface().and_then(|sf| sf.downcast::<gdk::Toplevel>().ok())
+                .is_some_and(|t| t.state().contains(gdk::ToplevelState::MINIMIZED));
+            if hidden && !v.is_playing_audio() { on_screen(&s, false); }
         });
     }
     {
@@ -1651,6 +1670,44 @@ fn end_spare_web_processes() {
     if ended > 0 { eprintln!("gaze: ended {ended} spare web process(es)"); }
 }
 
+/// The window left the screen or came back. Pages keep running off screen:
+/// on 5 Nov 2026 a chat tab woke its web process some 20 times a second,
+/// about 70 mW. After `freeze` seconds off screen gaze stops its web
+/// processes (SIGSTOP), unless a tab plays sound; back on screen they go on
+/// at once. One timer per time the window leaves, nothing on a clock.
+fn on_screen(shared: &Shared, shown: bool) {
+    if shown {
+        thaw(shared);
+        return;
+    }
+    let secs = {
+        let a = shared.borrow();
+        if a.freeze_timer.is_some() || !a.frozen.is_empty() { return; }
+        a.cfg.freeze
+    };
+    if secs == 0 { return; }
+    debug("the window left the screen");
+    let s = shared.clone();
+    let id = glib::timeout_add_seconds_local_once(secs, move || {
+        let mut a = s.borrow_mut();
+        a.freeze_timer = None;
+        if a.tabs.tabs.iter().any(|t| t.audio) { return; }
+        a.frozen = web_processes();
+        for &pid in &a.frozen { unsafe { libc::kill(pid, libc::SIGSTOP); } }
+        debug(&format!("off screen: {} web processes stopped", a.frozen.len()));
+    });
+    shared.borrow_mut().freeze_timer = Some(id);
+}
+
+/// The stopped web processes go on, and a stop that waits is dropped.
+fn thaw(shared: &Shared) {
+    let mut a = shared.borrow_mut();
+    if let Some(id) = a.freeze_timer.take() { id.remove(); }
+    if a.frozen.is_empty() { return; }
+    for pid in a.frozen.drain(..) { unsafe { libc::kill(pid, libc::SIGCONT); } }
+    debug("on screen: web processes go on");
+}
+
 /// This gaze's web processes: its children, or found through the bwrap
 /// sandboxes WebKit starts them in.
 fn web_processes() -> Vec<i32> {
@@ -1879,6 +1936,7 @@ fn paste_and_open(shared: &Shared, new_tab: bool) {
 
 fn quit(shared: &Shared) {
     save_session(shared);
+    thaw(shared);
     shared.borrow().ui.window.close();
 }
 

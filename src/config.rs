@@ -46,6 +46,9 @@ pub struct Config {
     /// The program a mailto: link goes to, with the link as its last
     /// argument: `kastrup --draft`, `xdg-open`. Empty does nothing.
     pub mail: String,
+    /// Seconds the window may stay off screen before its pages stop
+    /// running; 0 lets them run.
+    pub freeze: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -80,6 +83,7 @@ impl Default for Config {
             terminal: "glass --".into(),
             editor: "scribe".into(),
             mail: "kastrup --draft".into(),
+            freeze: 300,
         }
     }
 }
@@ -127,6 +131,9 @@ editor: scribe
 # argument. kastrup --draft queues a draft for + in kastrup; xdg-open asks
 # the desktop for its mail program:
 mail: kastrup --draft
+# Pages stop running when the window has been off screen this many seconds,
+# unless a tab plays sound, and go on the moment it is back. 0 lets them run.
+freeze: 300
 # Tab groups that always exist, with a colour name or #rrggbb:
 # groups:
 #   - {name: Work, color: '#5faf87'}
