@@ -176,6 +176,10 @@ A video page goes to `mpv` instead of the browser: a click on a YouTube link, a 
 
 `video_player` in the config names the program, empty keeps videos in gaze, and `video_urls` lists how a video page's address starts.
 
+## Uploads
+
+An upload button on a page opens [pointer](https://github.com/isene/pointer) in a new terminal window. `t` tags a file, `q` sends the tagged files to the page. Quitting with nothing tagged cancels. It needs `pointer` on the PATH and `terminal` in the config.
+
 ## Mail links
 
 A `mailto:` link opens no tab. It goes to the program named as `mail` in the config, with the link as its last argument. The default is `kastrup --draft`, which queues a draft with the link's address, subject and text; `+` in kastrup opens it. `xdg-open` hands the link to the desktop's mail program instead.

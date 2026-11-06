@@ -245,7 +245,7 @@ dependencies = [
 
 [[package]]
 name = "gaze"
-version = "0.3.50"
+version = "0.3.51"
 dependencies = [
  "argon2",
  "chacha20poly1305",

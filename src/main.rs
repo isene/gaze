@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use webkit6::prelude::*;
 use webkit6::{
-    AuthenticationRequest, AutoplayPolicy, CookieAcceptPolicy, CookiePersistentStorage, Credential, CredentialPersistence, Download, FindOptions, LoadEvent,
+    AuthenticationRequest, AutoplayPolicy, CookieAcceptPolicy, CookiePersistentStorage, Credential, CredentialPersistence, Download, FileChooserRequest, FindOptions, LoadEvent,
     NavigationPolicyDecision, NetworkSession, PolicyDecisionType, ResponsePolicyDecision, Settings,
     URISchemeRequest, UserContentFilter, UserContentFilterStore, UserContentInjectedFrames,
     UserContentManager, UserScript, UserScriptInjectionTime, WebContext, WebView, WebViewSessionState, WebsitePolicies,
@@ -667,6 +667,14 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
             refresh(&s);
         });
     }
+    {
+        // An upload button: pointer picks the files, in a terminal window.
+        let s = shared.clone();
+        view.connect_run_file_chooser(move |_, req| {
+            pick_files(&s, req.clone());
+            true
+        });
+    }
     // A page that fails to load leaves one line in ~/.gaze/errors.log:
     // the time, the address and what went wrong. It runs only on failure.
     view.connect_load_failed(move |_, _, uri, err| {
@@ -1062,11 +1070,7 @@ fn start_editor(terminal: &str, editor: &str, text: String, view: WebView) -> St
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let mut ed = editor.split_whitespace();
-    // glass runs a command only by its full path.
-    let program = ed.next().and_then(|name| {
-        if name.contains('/') { return Some(PathBuf::from(name)); }
-        std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join(name)).find(|f| f.is_file()))
-    });
+    let program = ed.next().and_then(find_program);
     let Some(program) = program else { return format!("The editor \"{editor}\" is not on the PATH (editor in config.yml)") };
     let mut words = terminal.split_whitespace();
     let Some(term) = words.next() else { return "Name a terminal in config.yml to open the editor in".into() };
@@ -1094,6 +1098,51 @@ fn start_editor(terminal: &str, editor: &str, text: String, view: WebView) -> St
             format!("{term}: {e}")
         }
     }
+}
+
+/// The full path of a program; glass runs a command only by its full path.
+fn find_program(name: &str) -> Option<PathBuf> {
+    if name.contains('/') { return Some(PathBuf::from(name)); }
+    std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join(name)).find(|f| f.is_file()))
+}
+
+/// An upload button on a page: pointer opens in a terminal window, where
+/// `t` tags files and `q` ends. When the window closes, the tagged files go
+/// to the page; none tagged cancels. GTK's own file dialog never showed on
+/// this desktop and left the tab waiting for it.
+fn pick_files(shared: &Shared, req: FileChooserRequest) {
+    let terminal = shared.borrow().cfg.terminal.clone();
+    let mut words = terminal.split_whitespace();
+    let (Some(term), Some(pointer)) = (words.next(), find_program("pointer")) else {
+        req.cancel();
+        set_message(shared, "Picking a file needs a terminal in config.yml and pointer on the PATH");
+        return;
+    };
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let file = std::env::temp_dir().join(format!("gaze-pick-{}-{nanos}.txt", std::process::id()));
+    let null = std::process::Stdio::null;
+    match std::process::Command::new(term).args(words).arg(&pointer).arg(format!("--pick={}", file.display()))
+        .stdin(null()).stdout(null()).stderr(null()).spawn() {
+        Ok(child) => {
+            glib::child_watch_add_local(glib::Pid(child.id() as i32), move |_, _| {
+                let list = std::fs::read_to_string(&file).unwrap_or_default();
+                let _ = std::fs::remove_file(&file);
+                let files = picked_files(&list, req.selects_multiple());
+                if files.is_empty() { req.cancel(); } else { req.select_files(&files); }
+            });
+            set_message(shared, "Pick in pointer: t tags a file, q sends the tagged files");
+        }
+        Err(e) => {
+            req.cancel();
+            set_message(shared, &format!("{term}: {e}"));
+        }
+    }
+}
+
+/// The files pointer wrote, one path a line; the first only when the page
+/// takes one file.
+fn picked_files(list: &str, many: bool) -> Vec<&str> {
+    list.lines().filter(|l| !l.trim().is_empty()).take(if many { usize::MAX } else { 1 }).collect()
 }
 
 /// What goes back into a field after the editor: nothing when the text is
@@ -3053,7 +3102,7 @@ paper size (<code>paper: a4</code>), zoom, scroll step, ad blocking, text size o
 
 #[cfg(test)]
 mod tests {
-    use super::{free_path, home_html, page_name, paper_name, picked, saved, tabbar_markup, Tabs};
+    use super::{free_path, home_html, page_name, paper_name, picked, picked_files, saved, tabbar_markup, Tabs};
 
     #[test]
     fn the_home_page_escapes_titles_and_says_what_is_empty() {
@@ -3114,6 +3163,13 @@ mod tests {
         std::fs::write(dir.join("A page-2.pdf"), "x").unwrap();
         assert_eq!(free_path(&dir, "A page.pdf"), dir.join("A page-3.pdf"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_picked_files_skip_blank_lines_and_give_one_when_one_is_wanted() {
+        assert_eq!(picked_files("/a/x.mp4\n\n/b/y.png", true), vec!["/a/x.mp4", "/b/y.png"]);
+        assert_eq!(picked_files("/a/x.mp4\n/b/y.png", false), vec!["/a/x.mp4"]);
+        assert!(picked_files("", true).is_empty());
     }
 
     #[test]
