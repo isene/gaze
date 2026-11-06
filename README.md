@@ -178,7 +178,11 @@ A video page goes to `mpv` instead of the browser: a click on a YouTube link, a 
 
 ## Uploads
 
-An upload button on a page opens [pointer](https://github.com/isene/pointer) in a new terminal window. `t` tags a file, `q` sends the tagged files to the page. Quitting with nothing tagged cancels. It needs `pointer` on the PATH and `terminal` in the config.
+An upload button on a page opens [pointer](https://github.com/isene/pointer) in a new terminal window. `t` tags a file, `q` sends the tagged files to the page. Quitting with nothing tagged cancels. It needs `pointer` on the PATH and `terminal` in the config. The status line says when the files went to the page; the page shows its own upload.
+
+## A page that stops
+
+A page that crashes, or uses more memory than WebKit allows, stays on screen but no longer moves. The status line says which of the two happened, `r` reloads the page, and `~/.gaze/errors.log` keeps a line.
 
 ## Mail links
 

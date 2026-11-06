@@ -23,7 +23,7 @@ use webkit6::{
     AuthenticationRequest, AutoplayPolicy, CookieAcceptPolicy, CookiePersistentStorage, Credential, CredentialPersistence, Download, FileChooserRequest, FindOptions, LoadEvent,
     NavigationPolicyDecision, NetworkSession, PolicyDecisionType, ResponsePolicyDecision, Settings,
     URISchemeRequest, UserContentFilter, UserContentFilterStore, UserContentInjectedFrames,
-    UserContentManager, UserScript, UserScriptInjectionTime, WebContext, WebView, WebViewSessionState, WebsitePolicies,
+    UserContentManager, UserScript, UserScriptInjectionTime, WebContext, WebProcessTerminationReason, WebView, WebViewSessionState, WebsitePolicies,
 };
 
 use passwords::{Change, Login, Store};
@@ -675,16 +675,25 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
             true
         });
     }
+    {
+        // A page whose web process died stays on screen, frozen, with no
+        // title. The status line says why, and errors.log keeps it.
+        let s = shared.clone();
+        view.connect_web_process_terminated(move |v, reason| {
+            let why = match reason {
+                WebProcessTerminationReason::ExceededMemoryLimit => "used more memory than WebKit allows, so WebKit stopped it",
+                WebProcessTerminationReason::Crashed => "crashed",
+                _ => return,
+            };
+            let uri = v.uri().map(|u| u.to_string()).unwrap_or_default();
+            if !private { log_error(&uri, why); }
+            set_message(&s, &format!("The page {why}. r reloads it"));
+        });
+    }
     // A page that fails to load leaves one line in ~/.gaze/errors.log:
     // the time, the address and what went wrong. It runs only on failure.
     view.connect_load_failed(move |_, _, uri, err| {
-        use std::io::Write;
-        if private { return false; }
-        let path = config::expand("~/.gaze/errors.log");
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-            let _ = writeln!(f, "{now}\t{uri}\t{} ({:?} {})", err, err.domain(), err.code());
-        }
+        if !private { log_error(uri, &format!("{} ({:?} {})", err, err.domain(), err.code())); }
         false
     });
     {
@@ -1100,6 +1109,16 @@ fn start_editor(terminal: &str, editor: &str, text: String, view: WebView) -> St
     }
 }
 
+/// One line in ~/.gaze/errors.log: the time, the address and what went wrong.
+fn log_error(uri: &str, what: &str) {
+    use std::io::Write;
+    let path = config::expand("~/.gaze/errors.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let _ = writeln!(f, "{now}\t{uri}\t{what}");
+    }
+}
+
 /// The full path of a program; glass runs a command only by its full path.
 fn find_program(name: &str) -> Option<PathBuf> {
     if name.contains('/') { return Some(PathBuf::from(name)); }
@@ -1124,11 +1143,18 @@ fn pick_files(shared: &Shared, req: FileChooserRequest) {
     match std::process::Command::new(term).args(words).arg(&pointer).arg(format!("--pick={}", file.display()))
         .stdin(null()).stdout(null()).stderr(null()).spawn() {
         Ok(child) => {
+            let s = shared.clone();
             glib::child_watch_add_local(glib::Pid(child.id() as i32), move |_, _| {
                 let list = std::fs::read_to_string(&file).unwrap_or_default();
                 let _ = std::fs::remove_file(&file);
                 let files = picked_files(&list, req.selects_multiple());
-                if files.is_empty() { req.cancel(); } else { req.select_files(&files); }
+                if files.is_empty() {
+                    req.cancel();
+                    set_message(&s, "No file tagged, so nothing went to the page");
+                } else {
+                    req.select_files(&files);
+                    set_message(&s, &sent_note(&files));
+                }
             });
             set_message(shared, "Pick in pointer: t tags a file, q sends the tagged files");
         }
@@ -1137,6 +1163,13 @@ fn pick_files(shared: &Shared, req: FileChooserRequest) {
             set_message(shared, &format!("{term}: {e}"));
         }
     }
+}
+
+/// What the status line says once files went to the page: their names and size.
+fn sent_note(files: &[&str]) -> String {
+    let bytes: u64 = files.iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum();
+    let names: Vec<&str> = files.iter().map(|f| f.rsplit('/').next().unwrap_or(f)).collect();
+    format!("Sent to the page: {} ({:.1} MB). The page uploads it now", names.join(", "), bytes as f64 / 1e6)
 }
 
 /// The files pointer wrote, one path a line; the first only when the page
@@ -3102,7 +3135,7 @@ paper size (<code>paper: a4</code>), zoom, scroll step, ad blocking, text size o
 
 #[cfg(test)]
 mod tests {
-    use super::{free_path, home_html, page_name, paper_name, picked, picked_files, saved, tabbar_markup, Tabs};
+    use super::{free_path, home_html, page_name, paper_name, picked, picked_files, saved, sent_note, tabbar_markup, Tabs};
 
     #[test]
     fn the_home_page_escapes_titles_and_says_what_is_empty() {
@@ -3170,6 +3203,16 @@ mod tests {
         assert_eq!(picked_files("/a/x.mp4\n\n/b/y.png", true), vec!["/a/x.mp4", "/b/y.png"]);
         assert_eq!(picked_files("/a/x.mp4\n/b/y.png", false), vec!["/a/x.mp4"]);
         assert!(picked_files("", true).is_empty());
+    }
+
+    #[test]
+    fn the_note_on_sent_files_gives_their_names_and_size() {
+        let f = std::env::temp_dir().join(format!("gaze-test-{}.mp4", std::process::id()));
+        std::fs::write(&f, vec![0u8; 2_000_000]).unwrap();
+        let path = f.to_string_lossy().to_string();
+        let note = sent_note(&[path.as_str()]);
+        let _ = std::fs::remove_file(&f);
+        assert!(note.starts_with(&format!("Sent to the page: gaze-test-{}.mp4 (2.0 MB)", std::process::id())), "{note}");
     }
 
     #[test]
