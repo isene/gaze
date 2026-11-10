@@ -5,6 +5,26 @@
 pub const PAGE: &str = r#"
 (function () {
   if (window.__gaze) return;
+  // WebKitGTK turns a video frame timed below zero into a huge time, and
+  // then drops every later frame: the video plays as a blank box (hls.js
+  // on Substack starts at -2.7 ms). Each media buffer plays 50 ms later,
+  // which WebKit still counts as time 0, and the page sees its own offset.
+  if (window.MediaSource && window.SourceBuffer) {
+    const SHIFT = 0.05, off = Object.getOwnPropertyDescriptor(SourceBuffer.prototype, 'timestampOffset');
+    const add = MediaSource.prototype.addSourceBuffer;
+    if (off && off.set && add) {
+      Object.defineProperty(SourceBuffer.prototype, 'timestampOffset', {
+        configurable: true, enumerable: off.enumerable,
+        get() { return off.get.call(this) - SHIFT; },
+        set(v) { off.set.call(this, v + SHIFT); },
+      });
+      MediaSource.prototype.addSourceBuffer = function (type) {
+        const sb = add.call(this, type);
+        try { off.set.call(sb, SHIFT); } catch (e) {}
+        return sb;
+      };
+    }
+  }
   const post = m => { try { window.webkit.messageHandlers.gaze.postMessage(JSON.stringify(m)); } catch (e) {} };
   const visible = el => {
     if (!el) return false;
