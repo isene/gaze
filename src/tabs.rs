@@ -59,6 +59,13 @@ pub struct Tab {
     /// page fits the window or has not said yet.
     #[serde(skip)]
     pub scrolled: Option<u8>,
+    /// How far down the page is, in pixels. A tab restored after a
+    /// restart scrolls back there once its page has loaded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<u32>,
+    /// The place to scroll back to when the page now loading is done.
+    #[serde(skip)]
+    pub restore_to: Option<u32>,
 }
 
 #[derive(Default, Serialize, Deserialize, Debug)]
@@ -135,7 +142,7 @@ impl Tabs {
         self.next_id += 1;
         let group = self.current().and_then(|t| t.group);
         let at = if self.tabs.is_empty() { 0 } else { self.active + 1 };
-        self.tabs.insert(at, Tab { id, uri: uri.to_string(), title: String::new(), group, opener, pending: false, private: false, audio: false, muted: false, scrolled: None });
+        self.tabs.insert(at, Tab { id, uri: uri.to_string(), title: String::new(), group, opener, pending: false, private: false, audio: false, muted: false, scrolled: None, place: None, restore_to: None });
         if !background || self.tabs.len() == 1 { self.active = at; }
         id
     }
@@ -415,6 +422,7 @@ mod tests {
         let mut t = three();
         t.set_group(1, "keep");
         t.active = 1;
+        t.tabs[1].place = Some(4321);
         let dir = std::env::temp_dir().join(format!("gaze-test-{}", std::process::id()));
         let path = dir.join("session.json");
         t.save(&path).unwrap();
@@ -424,6 +432,7 @@ mod tests {
         assert_eq!(back.groups, t.groups);
         assert_eq!(back.active, 1);
         assert!(back.tabs.iter().all(|x| x.pending));
+        assert_eq!(back.tabs.iter().map(|x| x.place).collect::<Vec<_>>(), [None, Some(4321), None]);
         let mut back = back;
         let id = back.open("z", false);
         assert!(t.tabs.iter().all(|x| x.id != id), "a restored session never reuses an id");

@@ -590,11 +590,14 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
                     if let Some(i) = a.tabs.index_of(id) {
                         if let Some(u) = v.uri() { a.tabs.tabs[i].uri = u.to_string(); }
                         a.tabs.tabs[i].scrolled = None;
+                        a.tabs.tabs[i].place = None;
                     }
                     drop(a);
                     refresh(&s);
                 }
                 LoadEvent::Finished => {
+                    let back = { let mut a = s.borrow_mut(); a.tabs.index_of(id).and_then(|i| a.tabs.tabs[i].restore_to.take()) };
+                    if let Some(y) = back { run_js(v, &js::scroll_to_y(y)); }
                     refresh(&s);
                     // A private tab is in no history and no session file,
                     // and a login is filled there only when asked (gp).
@@ -1671,6 +1674,7 @@ fn show_active(shared: &Shared) {
         let mut a = shared.borrow_mut();
         let Some(tab) = a.tabs.current_mut() else { return };
         let pending = std::mem::take(&mut tab.pending);
+        if pending { tab.restore_to = tab.place; }
         let uri = tab.uri.clone();
         let id = tab.id;
         (a.views.get(&id).cloned(), pending, uri)
@@ -2717,8 +2721,11 @@ fn on_message(shared: &Shared, id: u64, text: &str) {
         }
         "scroll" => {
             let p = v.get("p").and_then(|p| p.as_u64()).filter(|p| *p <= 100).map(|p| p as u8);
+            let y = v.get("y").and_then(|y| y.as_u64()).filter(|y| *y > 0).map(|y| y.min(u32::MAX as u64) as u32);
             let mut a = shared.borrow_mut();
             let Some(i) = a.tabs.index_of(id) else { return };
+            // Kept for the next save; a scroll writes nothing by itself.
+            a.tabs.tabs[i].place = y;
             if a.tabs.tabs[i].scrolled == p { return; }
             a.tabs.tabs[i].scrolled = p;
             // Only the right end of the bar changes.

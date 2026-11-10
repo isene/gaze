@@ -399,8 +399,10 @@ pub const PAGE: &str = r#"
   G.captureLogins();
   // How far down the reader is, for the status bar. A message goes only
   // when the whole percent changes; -1 when the page fits the window.
+  // The pixels down the page go along, and once more when scrolling
+  // stops, so a restart can bring the reader back to the same line.
   if (window === window.top) {
-    let last = null;
+    let last = null, lastY = 0, timer = 0;
     const where = e => {
       const page = document.scrollingElement || document.documentElement;
       const t = e && e.target;
@@ -412,7 +414,10 @@ pub const PAGE: &str = r#"
         el = t; room = t.scrollHeight - t.clientHeight;
       }
       const p = room > 1 ? Math.max(0, Math.min(100, Math.round(100 * el.scrollTop / room))) : -1;
-      if (p !== last) { last = p; post({ t: 'scroll', p }); }
+      const y = el === page ? Math.round(page.scrollTop) : 0;
+      clearTimeout(timer);
+      if (p !== last) { last = p; lastY = y; post({ t: 'scroll', p, y }); }
+      else if (y !== lastY) timer = setTimeout(() => { lastY = y; post({ t: 'scroll', p, y }); }, 500);
     };
     addEventListener('scroll', where, { capture: true, passive: true });
     // pageshow comes on a first load and on a page brought back by Back.
@@ -444,6 +449,11 @@ pub fn scroll(dx: i32, dy: f64, page: bool) -> String {
     } else {
         format!("{t}({dx}, {dy}).scrollBy({{left: {dx}, top: {dy}, behavior: 'instant'}})", t = TARGET, dx = dx, dy = dy)
     }
+}
+
+/// Down the page to a place saved before a restart.
+pub fn scroll_to_y(y: u32) -> String {
+    format!("window.scrollTo({{top: {y}, behavior: 'instant'}})")
 }
 
 /// To the top, or to the bottom when `end`.
