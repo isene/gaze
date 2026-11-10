@@ -397,6 +397,27 @@ pub const PAGE: &str = r#"
   };
   G.trackFocus();
   G.captureLogins();
+  // How far down the reader is, for the status bar. A message goes only
+  // when the whole percent changes; -1 when the page fits the window.
+  if (window === window.top) {
+    let last = null;
+    const where = e => {
+      const page = document.scrollingElement || document.documentElement;
+      const t = e && e.target;
+      let el = page, room = page.scrollHeight - innerHeight;
+      if (t && t !== document && t !== page) {
+        // A box of its own counts only on a page that cannot move, as
+        // with the scroll keys (Suno keeps its content in such a box).
+        if (room > 1 || t.scrollHeight <= t.clientHeight + 1) return;
+        el = t; room = t.scrollHeight - t.clientHeight;
+      }
+      const p = room > 1 ? Math.max(0, Math.min(100, Math.round(100 * el.scrollTop / room))) : -1;
+      if (p !== last) { last = p; post({ t: 'scroll', p }); }
+    };
+    addEventListener('scroll', where, { capture: true, passive: true });
+    // pageshow comes on a first load and on a page brought back by Back.
+    addEventListener('pageshow', () => { last = null; where(null); });
+  }
 })();
 "#;
 

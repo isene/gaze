@@ -209,6 +209,8 @@ cargo install --path .
 
 Runtime: WebKitGTK 6.0 and GTK 4. Pages are painted on the graphics chip built into the processor, and a discrete card is never woken. `GAZE_CPU=1` paints them on the processor instead, for a machine whose graphics are worse. Where the desktop asks every program for GTK's `cairo` renderer, gaze uses `ngl` for itself. The frames then stay on the chip: a moving page costs 38% of a core instead of 307%. gaze also drops `gl` from `GDK_DISABLE` for itself. With GL switched off that way, WebKit crashes on pages with video. `GAZE_KEEP_GDK_DISABLE=1` leaves the variable alone. To make gaze the browser other programs open links in, copy `share/gaze.desktop` to `~/.local/share/applications/` and run `xdg-settings set default-web-browser gaze.desktop`. A second `gaze <url>` opens the URL in the running window.
 
+The right end of the status bar shows the address and how far down the page you are, in percent. A page that fits the window shows no percent.
+
 Once a new build replaces the program, the status bar says in orange that this gaze is old and should be restarted.
 
 The message at the bottom left can be selected with the mouse. Ctrl-c copies the selection, and a middle click pastes it, as with any selected text.

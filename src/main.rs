@@ -589,6 +589,7 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
                     a.hover.clear();
                     if let Some(i) = a.tabs.index_of(id) {
                         if let Some(u) = v.uri() { a.tabs.tabs[i].uri = u.to_string(); }
+                        a.tabs.tabs[i].scrolled = None;
                     }
                     drop(a);
                     refresh(&s);
@@ -1230,15 +1231,7 @@ fn refresh(shared: &Shared) {
             String::new()
         };
         let left = format!("{}{}{}{}", old, mode, glib::markup_escape_text(&a.message), keys);
-        let uri = a.tabs.current().map(|t| t.uri.clone()).unwrap_or_default();
-        let progress = current_view(&a).map(|v| v.estimated_load_progress()).unwrap_or(1.0);
-        let right = if !a.hover.is_empty() {
-            a.hover.clone()
-        } else if progress < 1.0 {
-            format!("{:.0}%  {}", progress * 100.0, uri)
-        } else {
-            uri
-        };
+        let right = right_label(&a);
         let t = a.tabs.current().map(|t| if t.title.is_empty() { t.uri.clone() } else { t.title.clone() }).unwrap_or_default();
         let title = if t.is_empty() { "gaze".to_string() } else { format!("{} - gaze", t) };
         (bar, left, right, title)
@@ -1248,6 +1241,26 @@ fn refresh(shared: &Shared) {
     a.ui.status.set_markup(&left);
     a.ui.right.set_text(&right);
     a.ui.window.set_title(Some(&title));
+}
+
+/// The right end of the status bar: the link under the mouse, or the
+/// address with how far it has loaded or how far down the reader is.
+fn right_label(a: &App) -> String {
+    let tab = a.tabs.current();
+    let progress = current_view(a).map(|v| v.estimated_load_progress()).unwrap_or(1.0);
+    right_text(&a.hover, progress, tab.map(|t| t.uri.as_str()).unwrap_or(""), tab.and_then(|t| t.scrolled))
+}
+
+fn right_text(hover: &str, progress: f64, uri: &str, scrolled: Option<u8>) -> String {
+    if !hover.is_empty() {
+        hover.to_string()
+    } else if progress < 1.0 {
+        format!("{:.0}%  {}", progress * 100.0, uri)
+    } else if let Some(p) = scrolled {
+        format!("{uri}  {p}%")
+    } else {
+        uri.to_string()
+    }
 }
 
 /// Stands before the title of a private tab in the tab bar.
@@ -2702,6 +2715,15 @@ fn on_message(shared: &Shared, id: u64, text: &str) {
             if editable && mode == Mode::Normal { set_mode(shared, Mode::Insert); }
             else if !editable && mode == Mode::Insert { set_mode(shared, Mode::Normal); }
         }
+        "scroll" => {
+            let p = v.get("p").and_then(|p| p.as_u64()).filter(|p| *p <= 100).map(|p| p as u8);
+            let mut a = shared.borrow_mut();
+            let Some(i) = a.tabs.index_of(id) else { return };
+            if a.tabs.tabs[i].scrolled == p { return; }
+            a.tabs.tabs[i].scrolled = p;
+            // Only the right end of the bar changes.
+            if is_current { a.ui.right.set_text(&right_label(&a)); }
+        }
         "open" => {
             let uri = v.get("uri").and_then(|u| u.as_str()).unwrap_or("").to_string();
             let background = v.get("background").and_then(|b| b.as_bool()).unwrap_or(true);
@@ -3135,7 +3157,7 @@ paper size (<code>paper: a4</code>), zoom, scroll step, ad blocking, text size o
 
 #[cfg(test)]
 mod tests {
-    use super::{free_path, home_html, page_name, paper_name, picked, picked_files, saved, sent_note, tabbar_markup, Tabs};
+    use super::{free_path, home_html, page_name, paper_name, picked, picked_files, right_text, saved, sent_note, tabbar_markup, Tabs};
 
     #[test]
     fn the_home_page_escapes_titles_and_says_what_is_empty() {
@@ -3143,6 +3165,15 @@ mod tests {
         assert!(page.contains("&lt;b&gt;A&lt;/b&gt;") && page.contains("x=1&amp;y=2"));
         assert!(page.contains(">a.example<") && page.contains("gaze://help"));
         assert!(page.contains("bookmarks the page you are on"));
+    }
+
+    #[test]
+    fn the_bar_says_how_far_down_the_page_is() {
+        assert_eq!(right_text("", 1.0, "https://a.example/", Some(42)), "https://a.example/  42%");
+        assert_eq!(right_text("", 1.0, "https://a.example/", None), "https://a.example/");
+        // Loading and a link under the mouse come first.
+        assert_eq!(right_text("", 0.5, "https://a.example/", Some(42)), "50%  https://a.example/");
+        assert_eq!(right_text("https://b.example/", 1.0, "https://a.example/", Some(42)), "https://b.example/");
     }
 
     fn pdf_name(title: &str, uri: &str) -> String { page_name(title, uri, "pdf") }

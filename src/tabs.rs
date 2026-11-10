@@ -55,6 +55,10 @@ pub struct Tab {
     /// Sound is switched off for this tab.
     #[serde(skip)]
     pub muted: bool,
+    /// How far down the page the reader is, in percent; none while the
+    /// page fits the window or has not said yet.
+    #[serde(skip)]
+    pub scrolled: Option<u8>,
 }
 
 #[derive(Default, Serialize, Deserialize, Debug)]
@@ -131,7 +135,7 @@ impl Tabs {
         self.next_id += 1;
         let group = self.current().and_then(|t| t.group);
         let at = if self.tabs.is_empty() { 0 } else { self.active + 1 };
-        self.tabs.insert(at, Tab { id, uri: uri.to_string(), title: String::new(), group, opener, pending: false, private: false, audio: false, muted: false });
+        self.tabs.insert(at, Tab { id, uri: uri.to_string(), title: String::new(), group, opener, pending: false, private: false, audio: false, muted: false, scrolled: None });
         if !background || self.tabs.len() == 1 { self.active = at; }
         id
     }
