@@ -25,6 +25,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The password file's code lives in vault, beside this repo.
+      - name: Fetch vault
+        run: git clone --depth 1 https://github.com/isene/vault ../vault
+
       - name: Install WebKitGTK and GTK 4
         run: |
           sudo apt-get update

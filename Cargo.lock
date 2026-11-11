@@ -245,10 +245,8 @@ dependencies = [
 
 [[package]]
 name = "gaze"
-version = "0.3.55"
+version = "0.3.56"
 dependencies = [
- "argon2",
- "chacha20poly1305",
  "gtk4",
  "javascriptcore6",
  "libc",
@@ -256,6 +254,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "soup3",
+ "vault",
  "webkit6",
 ]
 
@@ -967,6 +966,16 @@ name = "unsafe-libyaml"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
+
+[[package]]
+name = "vault"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "chacha20poly1305",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "version-compare"

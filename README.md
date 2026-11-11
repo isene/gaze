@@ -71,7 +71,7 @@ A private tab keeps your visit off this machine. The site and your network still
 
 ## Passwords
 
-Logins live in `~/.gaze/sync/passwords`, one file sealed with ChaCha20-Poly1305 under a key that Argon2id makes from a master password. You choose the master password the first time gaze needs the file. It is asked once per session; `:password-lock` locks again.
+Logins live in `~/.gaze/sync/passwords`, one file sealed with ChaCha20-Poly1305 under a key that Argon2id makes from a master password. You choose the master password the first time gaze needs the file. It is asked once per session. `:password-lock` locks again, and so does locking the screen.
 
 - A login page gets filled when it loads. It gets the account the page names, or the login you used last there. `gp` cycles through the others.
 - Google asks for the account on one page and the password on the next. Each account still keeps its own password.
@@ -80,6 +80,7 @@ Logins live in `~/.gaze/sync/passwords`, one file sealed with ChaCha20-Poly1305 
 - In that dialog the keys are its own: type, `Tab` to the password, `Enter`. `Esc` closes it. A login typed there gets the same question.
 - `:passwords` lists the sites and usernames. Passwords themselves are never shown.
 - `:password-master` asks for a new master password, twice, and seals the file under it. Unlock first (`gp`).
+- [vault](https://github.com/isene/vault) opens the same file in a terminal. There you see and change every entry, and keep passwords that belong to no site.
 - `:password-import ~/logins.csv` reads the file Firefox writes from `about:logins` → Export Logins. gaze deletes the CSV after a successful import.
 
 ## The phone

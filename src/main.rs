@@ -7,7 +7,6 @@ mod config;
 mod history;
 mod js;
 mod keys;
-mod passwords;
 mod tabs;
 
 use gtk4 as gtk;
@@ -26,7 +25,8 @@ use webkit6::{
     UserContentManager, UserScript, UserScriptInjectionTime, WebContext, WebProcessTerminationReason, WebView, WebViewSessionState, WebsitePolicies,
 };
 
-use passwords::{Change, Login, Store};
+use vault as passwords;
+use vault::{Change, Login, Store};
 use tabs::Tabs;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -96,6 +96,7 @@ struct App {
     hist: history::History,
     /// Wakes gaze when the phone sends a tab.
     tab_watch: Option<gio::FileMonitor>,
+    lock_watch: Option<gio::FileMonitor>,
     /// What the command line offers right now, and which one Tab picked.
     offers: Vec<Offer>,
     selected: Option<usize>,
@@ -383,7 +384,7 @@ fn build(app: &gtk::Application) -> Shared {
         mode: Mode::Normal, keys: String::new(), ask: Ask::Command, prompt: None,
         message: String::new(), hover: String::new(), store, fill_at: HashMap::new(), users: HashMap::new(), login_boxes: HashMap::new(), typed: HashSet::new(),
         closed: Vec::new(), last_video: String::new(), find: String::new(), session_path, save_pending: false,
-        keymap, marks, dark_sites, mic_sites, hist, tab_watch: None, offers: Vec::new(), selected: None, setting_text: false, filter: None,
+        keymap, marks, dark_sites, mic_sites, hist, tab_watch: None, lock_watch: None, offers: Vec::new(), selected: None, setting_text: false, filter: None,
         frozen: Vec::new(), freeze_timer: None,
     }));
 
@@ -431,6 +432,7 @@ fn build(app: &gtk::Application) -> Shared {
     window.present();
     adblock_start(&shared);
     watch_tabs(&shared);
+    watch_lock(&shared);
     shared
 }
 
@@ -481,6 +483,22 @@ fn watch_tabs(shared: &Shared) {
         }
     });
     shared.borrow_mut().tab_watch = Some(monitor);
+}
+
+/// The passwords stay open for the session, and close when the screen
+/// is locked. The locker (bolt) writes `~/.cache/screenlock/locked` as it
+/// starts; inotify wakes gaze then, and at no other time.
+fn watch_lock(shared: &Shared) {
+    let Some(home) = std::env::var_os("HOME") else { return };
+    let dir = std::path::PathBuf::from(home).join(".cache/screenlock");
+    let _ = std::fs::create_dir_all(&dir);
+    let Ok(monitor) = gio::File::for_path(&dir).monitor_directory(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE) else { return };
+    let s = shared.clone();
+    monitor.connect_changed(move |_, _, _, _| {
+        let Ok(mut a) = s.try_borrow_mut() else { return };
+        if a.store.unlocked() { a.store.lock(); }
+    });
+    shared.borrow_mut().lock_watch = Some(monitor);
 }
 
 fn open_sent_tabs(shared: &Shared, dir: &std::path::Path) {
@@ -843,7 +861,7 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
                     origin: origin.clone(),
                     username: c.username().map(|u| u.to_string()).unwrap_or_default(),
                     password: c.password().map(|p| p.to_string()).unwrap_or_default(),
-                    used: 0,
+                    ..Login::default()
                 });
             });
             false
@@ -2749,7 +2767,7 @@ fn on_message(shared: &Shared, id: u64, text: &str) {
                 origin: v.get("origin").and_then(|s| s.as_str()).unwrap_or("").to_string(),
                 username: v.get("username").and_then(|s| s.as_str()).unwrap_or("").to_string(),
                 password: v.get("password").and_then(|s| s.as_str()).unwrap_or("").to_string(),
-                used: 0,
+                ..Login::default()
             };
             // A password page with no account on it: the account given
             // on the step before, as Google asks for them one at a time.
@@ -2919,7 +2937,8 @@ fn passwords_page() -> String {
         let mut a = s.borrow_mut();
         a.store.refresh();
         if !a.store.unlocked() { return None; }
-        let mut logins: Vec<&Login> = a.store.logins().iter().collect();
+        // The web logins. vault shows the rest.
+        let mut logins: Vec<&Login> = a.store.logins().iter().filter(|l| l.is_web()).collect();
         logins.sort_by(|x, y| passwords::site_key(&x.origin).cmp(&passwords::site_key(&y.origin)).then(x.username.cmp(&y.username)));
         Some(logins.iter().map(|l| format!("<tr><td>{}</td><td>{}</td></tr>", esc(&passwords::site_key(&l.origin)), esc(&l.username))).collect::<String>())
     }).flatten();
@@ -3025,12 +3044,7 @@ const BOOKMARKS_JS: &str = "const send=m=>window.webkit.messageHandlers.gaze.pos
 /// A random key made once a run, for messages from gaze's own pages.
 fn page_key() -> &'static str {
     static KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    KEY.get_or_init(|| {
-        use chacha20poly1305::aead::{rand_core::RngCore, OsRng};
-        let mut b = [0u8; 16];
-        OsRng.fill_bytes(&mut b);
-        b.iter().map(|x| format!("{:02x}", x)).collect()
-    })
+    KEY.get_or_init(|| vault::new_password(32))
 }
 
 /// Every command, grouped, for the help page. Keys come from the keymap.
