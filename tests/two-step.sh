@@ -125,6 +125,19 @@ start "fill by the account of step one" "$URL" && {
     check "the account typed on step one gets its password" says "Filled bob@example.com"
 }; stop
 
+start "the screen locks" "$URL?pick=alice@example.com" && {
+    xdotool key Escape; sleep 0.3; xdotool key g p; sleep 1; master
+    check "the passwords open" says "Filled alice@example.com"
+    # What the screen locker (bolt) does as it locks.
+    mkdir -p "$T/home/.cache/screenlock"; : > "$T/home/.cache/screenlock/locked"; sleep 1
+    check "they lock with the screen" grep -q "passwords locked with the screen" "$LOG"
+    : > "$LOG"
+    xdotool key g p; sleep 1
+    check "the next fill has to wait for the master password" [ "$(grep -c 'says Filled' "$LOG")" = 0 ]
+    master
+    check "and fills after it" says "Filled alice@example.com"
+}; stop
+
 echo
 if [ "$FAILED" = 0 ]; then echo "all passed"; else echo "$FAILED failed"; fi
 exit $((FAILED > 0))

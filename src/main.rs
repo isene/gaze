@@ -496,7 +496,10 @@ fn watch_lock(shared: &Shared) {
     let s = shared.clone();
     monitor.connect_changed(move |_, _, _, _| {
         let Ok(mut a) = s.try_borrow_mut() else { return };
-        if a.store.unlocked() { a.store.lock(); }
+        if a.store.unlocked() {
+            a.store.lock();
+            debug("passwords locked with the screen");
+        }
     });
     shared.borrow_mut().lock_watch = Some(monitor);
 }
