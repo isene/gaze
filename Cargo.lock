@@ -245,7 +245,7 @@ dependencies = [
 
 [[package]]
 name = "gaze"
-version = "0.3.56"
+version = "0.3.57"
 dependencies = [
  "gtk4",
  "javascriptcore6",

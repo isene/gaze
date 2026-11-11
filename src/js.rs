@@ -25,6 +25,16 @@ pub const PAGE: &str = r#"
       };
     }
   }
+  // A page that drags its own element (draggable="true") and names no
+  // effect offers copy, move and link at once. WebKitGTK then ends the
+  // drop with all three, GTK refuses that (gdk_drop_finish wants one),
+  // and the drop is never closed: gaze crashed on it. Such a drag is a
+  // move here, unless the page said otherwise. This runs after the
+  // page's own dragstart handlers.
+  window.addEventListener('dragstart', e => {
+    const dt = e.dataTransfer, el = e.target && e.target.closest ? e.target.closest('[draggable="true"]') : null;
+    if (dt && el && dt.effectAllowed === 'uninitialized') { try { dt.effectAllowed = 'move'; } catch (err) {} }
+  });
   const post = m => { try { window.webkit.messageHandlers.gaze.postMessage(JSON.stringify(m)); } catch (e) {} };
   const visible = el => {
     if (!el) return false;
