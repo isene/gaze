@@ -212,6 +212,8 @@ Runtime: WebKitGTK 6.0 and GTK 4. Pages are painted on the graphics chip built i
 
 The right end of the status bar shows the address and how far down the page you are, in percent. A page that fits the window shows no percent. Each tab keeps its place on the page when gaze quits and starts again.
 
+The status bar turns blue while the page in view loads, and goes back to grey when it is done.
+
 Once a new build replaces the program, the status bar says in orange that this gaze is old and should be restarted.
 
 The message at the bottom left can be selected with the mouse. Ctrl-c copies the selection, and a middle click pastes it, as with any selected text.

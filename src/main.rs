@@ -528,6 +528,7 @@ fn style(font_size: u32) {
     let css = format!("
         .tabbar, .statusbar {{ font-family: monospace; font-size: {px}px; padding: 2px 6px;
                               background: #1e1e1e; color: #c8c8c8; }}
+        .statusbar.loading {{ background: #17406e; color: #ffffff; }}
         .cmdline {{ font-family: monospace; font-size: {px}px; background: #101010; color: #ffffff;
                    border: none; border-radius: 0; padding: 2px 6px; min-height: 0; }}
         .completion {{ font-family: monospace; font-size: {px}px; padding: 4px 6px; background: #141414; color: #c8c8c8; }}
@@ -1261,6 +1262,11 @@ fn refresh(shared: &Shared) {
         (bar, left, right, title)
     };
     let a = shared.borrow();
+    // The bar is blue while the page in view loads.
+    let loading = current_view(&a).is_some_and(|v| v.estimated_load_progress() < 1.0);
+    if loading != a.ui.bottom.has_css_class("loading") {
+        if loading { a.ui.bottom.add_css_class("loading") } else { a.ui.bottom.remove_css_class("loading") }
+    }
     a.ui.tabbar.set_markup(&bar);
     a.ui.status.set_markup(&left);
     a.ui.right.set_text(&right);
