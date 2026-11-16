@@ -220,7 +220,7 @@ The message at the bottom left can be selected with the mouse. Ctrl-c copies the
 
 ## Files
 
-- `~/.gaze/config.yml`: the settings. Home page, search engines, download folder, paper size, zoom and scroll step. Ad blocking, dark pages, text size of the bars (`font_size`, in pixels) and standing groups. `freeze`: the seconds the window may stay off screen before its pages stop running (300; 0 lets them run). They go on the moment it is back, and a tab that plays sound keeps them all running.
+- `~/.gaze/config.yml`: the settings. Home page, search engines, download folder, paper size, zoom and scroll step. Ad blocking, dark pages, text size of the bars (`font_size`, in pixels) and standing groups. `freeze`: the seconds the window may stay off screen before its pages stop running (300; 0 lets them run). They go on the moment it is back, and a tab that plays sound keeps them all running. A page that opens a sound output and plays nothing gets it put to sleep after three seconds, so a silent tab does not keep the speaker awake.
 - `~/.gaze/keys.yml`: the key bindings you changed.
 - `~/.gaze/sync/`: shared with the phone through Syncthing. `passwords` (the sealed logins), `bookmarks` (one per line), and `tabs/` (the tabs sent across, one file each).
 - `~/.gaze/dark`: the sites where dark pages differ from the default, one `<site> on` or `<site> off` per line.

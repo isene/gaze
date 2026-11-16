@@ -5,6 +5,63 @@
 pub const PAGE: &str = r#"
 (function () {
   if (window.__gaze) return;
+  // A page that makes a Web Audio output keeps the speaker awake for as
+  // long as the tab lives, also with nothing playing (2 W on a laptop).
+  // So an output with no sound running sleeps after three seconds and
+  // wakes when a sound starts. One that takes a media element, a stream
+  // or code that makes sound is left alone: its sound cannot be seen here.
+  (function () {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const seen = new WeakMap();
+    const rest = (c) => {
+      const s = seen.get(c);
+      clearTimeout(s.t);
+      if (s.keep || s.n > 0) return;
+      s.t = setTimeout(() => {
+        if (!s.keep && s.n === 0 && c.state === 'running') { s.slept = true; c.suspend().catch(() => {}); }
+      }, 3000);
+    };
+    const wake = (c) => {
+      const s = seen.get(c);
+      clearTimeout(s.t);
+      if (s.slept && c.state === 'suspended') { s.slept = false; c.resume().catch(() => {}); }
+    };
+    const watched = new Proxy(AC, { construct(T, args, NT) {
+      const c = Reflect.construct(T, args, NT);
+      seen.set(c, { n: 0, keep: false, slept: false, t: 0 });
+      c.addEventListener('statechange', () => { if (c.state === 'running') rest(c); });
+      rest(c);
+      return c;
+    } });
+    if (window.AudioContext) window.AudioContext = watched;
+    if (window.webkitAudioContext) window.webkitAudioContext = watched;
+    for (const name of ['AudioBufferSourceNode', 'OscillatorNode', 'ConstantSourceNode']) {
+      const P = window[name] && window[name].prototype;
+      if (!P) continue;
+      const start = P.start;
+      P.start = function (...a) {
+        const c = this.context, s = seen.get(c);
+        if (s) {
+          s.n++;
+          wake(c);
+          this.addEventListener('ended', () => { s.n--; rest(c); }, { once: true });
+        }
+        return start.apply(this, a);
+      };
+    }
+    const keep = (c) => { const s = seen.get(c); if (s) { s.keep = true; wake(c); } };
+    const B = window.BaseAudioContext && window.BaseAudioContext.prototype;
+    for (const name of ['createMediaElementSource', 'createMediaStreamSource', 'createMediaStreamDestination', 'createScriptProcessor']) {
+      if (!B || !B[name]) continue;
+      const make = B[name];
+      B[name] = function (...a) { keep(this); return make.apply(this, a); };
+    }
+    for (const name of ['AudioWorkletNode', 'MediaElementAudioSourceNode', 'MediaStreamAudioSourceNode']) {
+      if (!window[name]) continue;
+      window[name] = new Proxy(window[name], { construct(T, args, NT) { keep(args[0]); return Reflect.construct(T, args, NT); } });
+    }
+  })();
   // WebKitGTK turns a video frame timed below zero into a huge time, and
   // then drops every later frame: the video plays as a blank box (hls.js
   // on Substack starts at -2.7 ms). Each media buffer plays 50 ms later,
