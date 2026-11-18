@@ -417,6 +417,15 @@ fn build(app: &gtk::Application) -> Shared {
             top.connect_state_notify(move |t| on_screen(&s, !t.state().contains(gdk::ToplevelState::MINIMIZED)));
         });
     }
+    {
+        // A new width fits the tab bar again: longer or shorter titles.
+        let s = shared.clone();
+        window.connect_realize(move |w| {
+            let Some(sf) = w.surface() else { return };
+            let s = s.clone();
+            sf.connect_width_notify(move |_| { let s = s.clone(); glib::idle_add_local_once(move || refresh(&s)); });
+        });
+    }
 
     // Bring the last session back. Only the current tab loads now; the
     // others load when you go to them.
@@ -1241,7 +1250,11 @@ fn rebuilt() -> bool {
 fn refresh(shared: &Shared) {
     let (bar, left, right, title) = {
         let a = shared.borrow();
-        let bar = tabbar_markup(&a.tabs);
+        // The bar's width in characters of its font; unknown before it is shown.
+        let w = a.ui.tabbar.width();
+        let ten = a.ui.tabbar.create_pango_layout(Some("0000000000")).pixel_size().0;
+        let cols = if w > 0 && ten > 0 { (w * 10 / ten) as usize } else { usize::MAX };
+        let bar = tabbar_markup(&a.tabs, cols);
         let mode = match a.mode {
             Mode::Insert => "<b>-- INSERT --</b>  ",
             Mode::Hint => "<b>HINT</b>  ",
@@ -1296,48 +1309,83 @@ fn right_text(hover: &str, progress: f64, uri: &str, scrolled: Option<u8>) -> St
 /// Stands before the title of a private tab in the tab bar.
 const PRIVATE_MARK: &str = "⊘ ";
 
-fn tabbar_markup(tabs: &Tabs) -> String {
+/// The tab bar for a bar `cols` characters wide. Titles get as many
+/// letters as lets every tab fit, from 40 down to 12; with more tabs than
+/// that the bar starts a few tabs before the current one, so it shows.
+fn tabbar_markup(tabs: &Tabs, cols: usize) -> String {
+    // The widest title limit that fits; the bar widens as the limit grows.
+    let (mut limit, mut top) = (12, 40);
+    while limit < top {
+        let mid = (limit + top + 1) / 2;
+        if tabbar_parts(tabs, 0, mid, false).1 <= cols { limit = mid } else { top = mid - 1 }
+    }
+    let mut first = 0;
+    let vis = tabs.visible_indices();
+    if !vis.is_empty() && tabbar_parts(tabs, 0, limit, false).1 > cols {
+        // Start as early as lets the bar reach its last tab; with too many
+        // tabs after the current one, leave them a third of the bar.
+        let pos = vis.iter().position(|&i| i == tabs.active).unwrap_or(0);
+        let mut s = pos;
+        while s > 0 && tabbar_parts(tabs, vis[s - 1], limit, false).1 <= cols { s -= 1; }
+        if tabbar_parts(tabs, vis[s], limit, false).1 > cols {
+            while s > 0 && tabbar_parts(tabs, vis[s - 1], limit, true).1 <= cols * 2 / 3 { s -= 1; }
+        }
+        first = vis[s];
+    }
+    tabbar_parts(tabs, first, limit, false).0
+}
+
+/// The bar from tab `first` on, each title cut to `limit` letters, and
+/// how many characters wide it is. With `upto` it ends at the current tab.
+fn tabbar_parts(tabs: &Tabs, first: usize, limit: usize, upto: bool) -> (String, usize) {
     let mut out = String::new();
+    let mut wide = 0;
+    let mut add = |out: &mut String, markup: String, plain: usize| { out.push_str(&markup); wide += plain; };
     let mut last_group: Option<u64> = None;
     let mut n = 0;
-    // With many tabs the bar is cut at the right edge; start it a few
-    // tabs before the current one so that one always shows.
-    let vis = tabs.visible_indices();
-    let pos = vis.iter().position(|&i| i == tabs.active).unwrap_or(0);
-    let first_shown = if pos >= 8 { vis[pos - 4] } else { 0 };
-    if first_shown > 0 { out.push_str("<span foreground=\"#7a7a7a\"> …</span>"); }
+    if first > 0 { add(&mut out, "<span foreground=\"#7a7a7a\"> …</span>".into(), 2); }
     for (i, t) in tabs.tabs.iter().enumerate() {
-        if i < first_shown { if tabs.visible(i) { n += 1; } continue; }
+        if i < first { if tabs.visible(i) { n += 1; } continue; }
+        if upto && i > tabs.active { break; }
         let group = t.group.and_then(|g| tabs.group_by_id(g));
         // An open group shows only as its colour on the tabs; a folded one
         // needs a label, since its tabs are hidden.
         if t.group != last_group {
             if let Some(g) = group.filter(|g| g.collapsed) {
-                let hex = tabs::color_hex(&g.color);
-                out.push_str(&format!(" <span foreground=\"{}\"><b>▸{}</b>({})</span>",
-                    hex, glib::markup_escape_text(&g.name), tabs.tabs_in(g.id).len()));
+                let label = format!(" ▸{}({})", g.name, tabs.tabs_in(g.id).len());
+                add(&mut out, format!(" <span foreground=\"{}\"><b>▸{}</b>({})</span>",
+                    tabs::color_hex(&g.color), glib::markup_escape_text(&g.name), tabs.tabs_in(g.id).len()), label.chars().count());
             }
             last_group = t.group;
         }
         if !tabs.visible(i) { continue; }
         n += 1;
-        if n > 1 && i > first_shown { out.push_str("<span foreground=\"#5c5c5c\"> │</span>"); }
+        if n > 1 && i > first { add(&mut out, "<span foreground=\"#5c5c5c\"> │</span>".into(), 2); }
         let raw = if t.title.is_empty() { t.uri.trim_start_matches("https://").trim_start_matches("http://").to_string() } else { t.title.clone() };
-        let short: String = raw.chars().take(20).collect();
-        let text = format!("{}{}{}", if t.private { PRIVATE_MARK } else { "" }, sound_mark(t), glib::markup_escape_text(short.trim()));
+        let raw = raw.trim();
+        let short: String = if raw.chars().count() > limit {
+            format!("{}…", raw.chars().take(limit - 1).collect::<String>().trim_end())
+        } else {
+            raw.to_string()
+        };
+        let plain = format!("{}{}{}", if t.private { PRIVATE_MARK } else { "" }, sound_mark(t), short);
+        let text = format!("{}{}{}", if t.private { PRIVATE_MARK } else { "" }, sound_mark(t), glib::markup_escape_text(&short));
+        let width = 2 + n.to_string().len() + plain.chars().count();
         let color = group.map(|g| tabs::color_hex(&g.color)).unwrap_or_else(|| (if t.pending { "#7a7a7a" } else { "#c8c8c8" }).to_string());
         if i == tabs.active {
             // The current tab: a light pill, its text in the group's colour.
             let fg = group.map(|g| tabs::color_hex(&g.color)).unwrap_or_else(|| "#1e1e1e".to_string());
-            out.push_str(&format!(" <span background=\"#e6e6e6\" foreground=\"{}\"><b> {} {} </b></span>", fg, n, text));
+            add(&mut out, format!(" <span background=\"#e6e6e6\" foreground=\"{}\"><b> {} {} </b></span>", fg, n, text), width + 2);
         } else {
-            out.push_str(&format!(" <span foreground=\"{}\">{} {}</span>", color, n, text));
+            add(&mut out, format!(" <span foreground=\"{}\">{} {}</span>", color, n, text), width);
         }
     }
-    for g in tabs.empty_groups() {
-        out.push_str(&format!("  <span foreground=\"{}\" alpha=\"60%\">·{}</span>", tabs::color_hex(&g.color), glib::markup_escape_text(&g.name)));
+    if !upto {
+        for g in tabs.empty_groups() {
+            add(&mut out, format!("  <span foreground=\"{}\" alpha=\"60%\">·{}</span>", tabs::color_hex(&g.color), glib::markup_escape_text(&g.name)), 3 + g.name.chars().count());
+        }
     }
-    out
+    (out, wide)
 }
 
 /// Stands before the title of a tab that plays sound, and of one whose
@@ -3288,12 +3336,32 @@ mod tests {
         tabs.tabs[1].audio = true;
         tabs.tabs[2].audio = true;
         tabs.tabs[2].muted = true;
-        let bar = tabbar_markup(&tabs);
+        let bar = tabbar_markup(&tabs, usize::MAX);
         assert!(bar.contains("1 Quiet") && !bar.contains("♪ Quiet"), "{bar}");
         assert!(bar.contains("♪ Song"), "{bar}");
         assert!(bar.contains("♪✕ Hushed"), "{bar}");
         // A muted tab keeps its mark when the sound stops.
         tabs.tabs[2].audio = false;
-        assert!(tabbar_markup(&tabs).contains("♪✕ Hushed"));
+        assert!(tabbar_markup(&tabs, usize::MAX).contains("♪✕ Hushed"));
+    }
+
+    #[test]
+    fn tab_bar_fills_its_width() {
+        let mut tabs = Tabs::default();
+        for i in 0..6 { tabs.open(&format!("https://example.com/{i}"), false); }
+        for t in tabs.tabs.iter_mut() { t.title = "A rather long page title, more than forty letters".into(); }
+        // Wide: titles keep 40 letters, every tab shows.
+        let wide = tabbar_markup(&tabs, 400);
+        assert!(wide.contains("A rather long page title, more than for…") && wide.contains("6 A rather"), "{wide}");
+        // Narrow: titles shrink to fit.
+        let mid = tabbar_markup(&tabs, 120);
+        assert!(!mid.contains("for…") && mid.contains("6 A rather"), "{mid}");
+        // Too narrow even at 12 letters: the bar starts before the current tab.
+        tabs.active = 5;
+        let thin = tabbar_markup(&tabs, 60);
+        assert!(thin.starts_with("<span foreground=\"#7a7a7a\"> …</span>") && thin.contains(" 6 A rather"), "{thin}");
+        // The current tab first: the bar starts at tab 1.
+        tabs.active = 0;
+        assert!(!tabbar_markup(&tabs, 60).starts_with("<span foreground=\"#7a7a7a\"> …"));
     }
 }

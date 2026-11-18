@@ -44,6 +44,8 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 
 `Tab` completes on the command line: command names, then group names after `:group` and colours after `:group-color`. `:bind <keys> <command>` changes a binding from the command line and `:unbind <keys>` drops one. The changes go to `~/.gaze/keys.yml`, which you can also edit by hand. Key names follow qutebrowser: plain characters as they are, else `<Ctrl-d>`, `<Alt-1>`, `<Shift-Left>`, `<Space>`, `<Backspace>`.
 
+The tab bar uses the whole window width: titles get up to 40 letters, fewer when that makes every tab fit. With more tabs than fit at 12 letters, the bar starts a few tabs before the current one.
+
 ## Tab groups
 
 `:group work` puts the current tab in the group *work*, made on the spot when it is new. Each group has a colour and shows as a coloured run in the tab bar. A tab opened from a grouped tab joins the group. `zc` folds the group away, and `J`/`K` skip its tabs until `zo` unfolds it. `:ungroup`, `:group-rename <name>`, `:group-color <colour>`, `:group-close` and `:groups` do what they say. A colour is a name (blue red yellow green pink purple orange cyan gray) or `#rrggbb`.
