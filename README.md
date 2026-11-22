@@ -91,6 +91,8 @@ gaze has a phone half in [nomad](https://github.com/isene/nomad/tree/master/apps
 
 `:send` opens the page you are on in gaze on the phone. A page the phone sends opens here as a background tab, and the status line says so.
 
+The phone's menu has *Laptop tabs*: the pages open here, with their groups, and a tap opens one on the phone. gaze writes the list to `~/.gaze/sync/tabs/laptop` when the tabs change. Private tabs stay out of it.
+
 Both sides read a changed file again before they write it. A login saved on the phone survives one saved here a minute later.
 
 ## History and bookmarks
@@ -224,7 +226,7 @@ The message at the bottom left can be selected with the mouse. Ctrl-c copies the
 
 - `~/.gaze/config.yml`: the settings. Home page, search engines, download folder, paper size, zoom and scroll step. Ad blocking, dark pages, text size of the bars (`font_size`, in pixels) and standing groups. `freeze`: the seconds the window may stay off screen before its pages stop running (300; 0 lets them run). They go on the moment it is back, and a tab that plays sound keeps them all running. A page that opens a sound output and plays nothing gets it put to sleep after three seconds, so a silent tab does not keep the speaker awake.
 - `~/.gaze/keys.yml`: the key bindings you changed.
-- `~/.gaze/sync/`: shared with the phone through Syncthing. `passwords` (the sealed logins), `bookmarks` (one per line), and `tabs/` (the tabs sent across, one file each).
+- `~/.gaze/sync/`: shared with the phone through Syncthing. `passwords` (the sealed logins), `bookmarks` (one per line), and `tabs/` (the tabs sent across, one file each, and `laptop`, the list of tabs open here).
 - `~/.gaze/dark`: the sites where dark pages differ from the default, one `<site> on` or `<site> off` per line.
 - `~/.gaze/history`: one line per visit, folded to one entry per page when read.
 - `~/.gaze/session.json`: the open tabs and groups, written when they change and read at start. Only the current tab loads at start; the others load when you go to them.

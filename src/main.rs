@@ -88,6 +88,8 @@ struct App {
     find: String,
     session_path: PathBuf,
     save_pending: bool,
+    /// The tab list last written for the phone.
+    laptop_list: String,
     keymap: keys::Keymap,
     marks: bookmarks::Bookmarks,
     dark_sites: config::DarkSites,
@@ -383,7 +385,7 @@ fn build(app: &gtk::Application) -> Shared {
         cfg, tabs, views: HashMap::new(), session, private_session: None, settings,
         mode: Mode::Normal, keys: String::new(), ask: Ask::Command, prompt: None,
         message: String::new(), hover: String::new(), store, fill_at: HashMap::new(), users: HashMap::new(), login_boxes: HashMap::new(), typed: HashSet::new(),
-        closed: Vec::new(), last_video: String::new(), find: String::new(), session_path, save_pending: false,
+        closed: Vec::new(), last_video: String::new(), find: String::new(), session_path, save_pending: false, laptop_list: String::new(),
         keymap, marks, dark_sites, mic_sites, hist, tab_watch: None, lock_watch: None, offers: Vec::new(), selected: None, setting_text: false, filter: None,
         frozen: Vec::new(), freeze_timer: None,
     }));
@@ -1925,8 +1927,22 @@ fn undo_close(shared: &Shared) {
 }
 
 fn save_session(shared: &Shared) {
-    let a = shared.borrow();
+    let mut a = shared.borrow_mut();
     if let Err(e) = a.tabs.save(&a.session_path) { eprintln!("gaze: could not save the session: {}", e); }
+    // The phone's "Laptop tabs" list, written only where the shared
+    // folder exists and only when it changed.
+    if !sync_path().is_dir() { return; }
+    let list = a.tabs.laptop_list();
+    if list == a.laptop_list { return; }
+    let path = sync_path().join("tabs/laptop");
+    let tmp = sync_path().join("tabs/.laptop.tmp");
+    let done = std::fs::create_dir_all(sync_path().join("tabs"))
+        .and_then(|_| std::fs::write(&tmp, &list))
+        .and_then(|_| std::fs::rename(&tmp, &path));
+    match done {
+        Ok(()) => a.laptop_list = list,
+        Err(e) => eprintln!("gaze: could not write the laptop tab list: {}", e),
+    }
 }
 
 /// Save a little later, so a page that changes its URI ten times while
@@ -3227,7 +3243,7 @@ to <code>~/.gaze/adblock/hosts</code> and compiles it into a WebKit content filt
 <p><code>~/.gaze/config.yml</code>: home page, search engine, more search engines by keyword (<code>engines</code>), download folder,
 paper size (<code>paper: a4</code>), zoom, scroll step, ad blocking, text size of the bars.
 <code>~/.gaze/keys.yml</code>: your key changes. <code>~/.gaze/sync/bookmarks</code>: one per line.
-<code>~/.gaze/sync/</code>: shared with the phone's gaze through Syncthing (passwords, bookmarks, tabs sent across).
+<code>~/.gaze/sync/</code>: shared with the phone's gaze through Syncthing (passwords, bookmarks, tabs sent across, the tabs open here).
 <code>~/.gaze/session.json</code>: the open tabs and groups.</p>
 </div></div>
 "#, logo = LOGO, ver = env!("CARGO_PKG_VERSION"), cards = cards)

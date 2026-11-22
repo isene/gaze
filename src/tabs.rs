@@ -108,6 +108,20 @@ impl Tabs {
         }
     }
 
+    /// The open web pages for the phone's "Laptop tabs" list, one line
+    /// each: address, title, group name and group colour, split by tabs.
+    /// Private tabs stay out.
+    pub fn laptop_list(&self) -> String {
+        let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ").trim().to_string();
+        let mut out = String::new();
+        for t in self.tabs.iter().filter(|t| !t.private && t.uri.starts_with("http")) {
+            let g = t.group.and_then(|id| self.group_by_id(id));
+            let (name, color) = g.map(|g| (clean(&g.name), color_hex(&g.color))).unwrap_or_default();
+            out += &format!("{}\t{}\t{}\t{}\n", clean(&t.uri), clean(&t.title), name, color);
+        }
+        out
+    }
+
     /// Make the tab private. Done once, right after it opens.
     pub fn set_private(&mut self, id: u64) {
         if let Some(i) = self.index_of(id) { self.tabs[i].private = true; }
@@ -308,6 +322,19 @@ mod tests {
         t.open("b", false);
         t.open("c", false);
         t
+    }
+
+    #[test]
+    fn the_laptop_list_leaves_out_private_tabs_and_non_web_pages() {
+        let mut t = Tabs::default();
+        t.next_id = 1;
+        t.open("https://a.example/", false);
+        t.open("https://secret.example/", false);
+        t.open("gaze://home", false);
+        t.tabs[0].title = "A\tpage\n".into();
+        t.set_group(0, "news");
+        t.set_private(t.tabs[1].id);
+        assert_eq!(t.laptop_list(), "https://a.example/\tA page\tnews\t#4a90e2\n");
     }
 
     #[test]
