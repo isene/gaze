@@ -91,7 +91,7 @@ gaze has a phone half in [nomad](https://github.com/isene/nomad/tree/master/apps
 
 `:send` opens the page you are on in gaze on the phone. A page the phone sends opens here as a background tab, and the status line says so.
 
-The phone's menu has *Laptop tabs*: the pages open here, with their groups, and a tap opens one on the phone. gaze writes the list to `~/.gaze/sync/tabs/laptop` when the tabs change. Private tabs stay out of it.
+The phone's menu has *Laptop tabs*: the pages open here, with their groups, and a tap opens one on the phone. gaze writes the list to `~/.gaze/sync/tabs/laptop` when the tabs change. Private tabs stay out of it. The other way round, `:phone-tabs` opens `gaze://phone`, the pages open on the phone. The phone writes that list each time gaze leaves its screen.
 
 Both sides read a changed file again before they write it. A login saved on the phone survives one saved here a minute later.
 

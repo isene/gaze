@@ -2540,6 +2540,7 @@ fn run_command(shared: &Shared, line: &str) {
             }
         }
         "bookmarks" => { open_tab(shared, "gaze://bookmarks", false); }
+        "phone-tabs" => { open_tab(shared, "gaze://phone", false); }
         "send" => {
             if !uri.starts_with("http") { set_message(shared, "Nothing to send from here"); return; }
             match send_to_phone(&uri, &title) {
@@ -2992,6 +2993,7 @@ fn serve_internal(req: &URISchemeRequest) {
         "help" => help_page(),
         "passwords" => passwords_page(),
         "bookmarks" => bookmarks_page(),
+        "phone" => phone_page(&std::fs::read_to_string(sync_path().join("tabs/phone")).unwrap_or_default()),
         other => format!("<h1>gaze://{}</h1><p>No such page. Try gaze://help.</p>", esc(other)),
     };
     let html = format!("<!doctype html><meta charset=utf-8><title>gaze</title><style>{}</style>{}", PAGE_CSS, body);
@@ -3069,10 +3071,27 @@ fn home_html(top: &[(String, String)], marks: &[(String, String)]) -> String {
     };
     format!("<body class=help><h1>gaze</h1><div class=more><div><h2>Most visited</h2>{}</div>\
              <div><h2>Bookmarks</h2>{}</div></div>\
-             <p class=links><a href=\"gaze://help\">Keys and help</a> <a href=\"gaze://bookmarks\">All bookmarks</a></p>\
+             <p class=links><a href=\"gaze://help\">Keys and help</a> <a href=\"gaze://bookmarks\">All bookmarks</a> <a href=\"gaze://phone\">Phone tabs</a></p>\
              <p class=u><kbd>o</kbd> opens a page or a search. Another home page: <code>home:</code> in <code>~/.gaze/config.yml</code>.</p>",
             list(top, "The pages you visit most show here."),
             list(marks, "<kbd>M</kbd> bookmarks the page you are on."))
+}
+
+/// gaze://phone: the tabs open in gaze on the phone, from the list it
+/// shares in ~/.gaze/sync/tabs/phone, one `url<TAB>title` line each.
+fn phone_page(list: &str) -> String {
+    let rows: String = list.lines().filter_map(|l| {
+        let (url, title) = l.split_once('\t').unwrap_or((l, ""));
+        let (url, title) = (url.trim(), title.trim());
+        url.starts_with("http").then(|| format!("<tr><td><a href=\"{0}\">{1}</a></td><td class=u>{0}</td></tr>",
+            esc(url), esc(if title.is_empty() { url } else { title })))
+    }).collect();
+    if rows.is_empty() {
+        return "<h1>Phone tabs</h1><p>None yet. gaze on the phone shares its open tabs through Syncthing \
+                each time it leaves the screen.</p>".to_string();
+    }
+    format!("<h1>Phone tabs</h1><p>The pages open in gaze on the phone. <kbd>f</kbd> then the letters opens one.</p>\
+             <table>{}</table>", rows)
 }
 
 fn bookmarks_page() -> String {
@@ -3159,6 +3178,7 @@ const COMMANDS: &[(&str, &str, &str)] = &[
     ("Tab groups", "groups", "list the groups"),
     ("Bookmarks", "bookmark-add [title]", "bookmark this page, under the title given or its own"), ("Bookmarks", "bookmark-del [url]", "forget this page's bookmark"),
     ("Tabs", "send", "open this page in gaze on the phone"),
+    ("Tabs", "phone-tabs", "the tabs open in gaze on the phone, at gaze://phone"),
     ("Bookmarks", "bookmarks", "the list, at gaze://bookmarks; tick boxes there to delete, ✎ to rename"), ("Bookmarks", "bookmark-import <file>", "read a Firefox HTML export"),
     ("Passwords", "fill", "fill the login form; again for the next saved login of the site"),
     ("Passwords", "passwords", "list the sites and usernames"), ("Passwords", "password-import <csv>", "read the CSV Firefox writes from about:logins → Export, then delete it"),
@@ -3202,7 +3222,7 @@ fn help_page() -> String {
 <p class=links><a href="https://github.com/isene/gaze">Repository</a> <a href="https://github.com/isene/gaze#readme">README</a>
 <a href="https://github.com/isene/gaze/releases">Releases</a> <a href="https://github.com/isene/gaze/issues">Issues</a>
 <a href="https://isene.org/fe2o3/">Fe₂O₃ suite</a> <a href="https://isene.org">isene.org</a>
-<a href="gaze://home">gaze://home</a> <a href="gaze://bookmarks">gaze://bookmarks</a> <a href="gaze://passwords">gaze://passwords</a></p>
+<a href="gaze://home">gaze://home</a> <a href="gaze://bookmarks">gaze://bookmarks</a> <a href="gaze://phone">gaze://phone</a> <a href="gaze://passwords">gaze://passwords</a></p>
 </div></header>
 <div class=modes>
 <div class=mode><b>Normal</b>Keys run the commands below. <kbd>Esc</kbd> always comes back here.</div>
@@ -3251,7 +3271,16 @@ paper size (<code>paper: a4</code>), zoom, scroll step, ad blocking, text size o
 
 #[cfg(test)]
 mod tests {
-    use super::{free_path, home_html, page_name, paper_name, picked, picked_files, right_text, saved, sent_note, tabbar_markup, Tabs};
+    use super::{free_path, home_html, page_name, paper_name, phone_page, picked, picked_files, right_text, saved, sent_note, tabbar_markup, Tabs};
+
+    #[test]
+    fn the_phone_page_lists_web_tabs_and_says_when_there_are_none() {
+        let page = phone_page("https://a.example/?x=1&y=2\t<b>A</b>\nhttps://b.example/\n\nfile:///x\tX\n");
+        assert!(page.contains("&lt;b&gt;A&lt;/b&gt;") && page.contains("x=1&amp;y=2"));
+        assert!(page.contains(">https://b.example/</a>"), "a tab with no title shows its address");
+        assert!(!page.contains("file:///x"));
+        assert!(phone_page("").contains("None yet"));
+    }
 
     #[test]
     fn the_home_page_escapes_titles_and_says_what_is_empty() {
