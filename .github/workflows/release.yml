@@ -17,7 +17,8 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
+          # 24.04, not latest: built on a newer Ubuntu, the binary needs a newer glibc than Debian 13 and Ubuntu 24.04 have.
+          - os: ubuntu-24.04
             artifact: gaze-linux-x86_64
           - os: ubuntu-24.04-arm
             artifact: gaze-linux-aarch64
