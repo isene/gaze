@@ -189,6 +189,15 @@ fn main() {
     if std::env::var_os("GAZE_CPU").is_none() && std::env::var("GSK_RENDERER").is_ok_and(|r| r == "cairo") {
         std::env::set_var("GSK_RENDERER", "ngl");
     }
+    // GTK redraws only what changed since a buffer was last drawn. When the
+    // display server shows gaze's own buffers on screen (frame's spare
+    // layer), gaze takes turns between two of them, and GTK's record of what
+    // changed slips: a lightbox's dark backdrop stopped at the picture's left
+    // edge and stayed so (2026-11-23). Full redraws cure it. A scroll redraws
+    // the whole page anyway, so the extra work is on small changes only.
+    if std::env::var_os("GSK_DEBUG").is_none() {
+        std::env::set_var("GSK_DEBUG", "full-redraw");
+    }
     // Never wake a discrete card: it is watts for nothing on a browser.
     if std::env::var_os("__EGL_VENDOR_LIBRARY_FILENAMES").is_none() {
         let mesa = "/usr/share/glvnd/egl_vendor.d/50_mesa.json";
