@@ -20,7 +20,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("<PgDown>", "scroll-page 0.9"), ("<PgUp>", "scroll-page -0.9"),
     ("H", "back"), ("L", "forward"), ("<Backspace>", "back"),
     ("<Ctrl-Left>", "back"), ("<Ctrl-Right>", "forward"),
-    ("r", "reload"), ("R", "reload-force"),
+    ("r", "reload"), ("R", "reload-force"), ("<Ctrl-c>", "stop"),
     ("o", "cmd open "), ("O", "cmd tabopen "), ("t", "cmd tabopen "), ("T", "cmd private "),
     ("go", "cmd open {url}"), ("gO", "cmd tabopen {url}"), (":", "cmd "),
     ("/", "find"), ("n", "find-next"), ("N", "find-prev"),
@@ -161,6 +161,7 @@ mod tests {
         assert_eq!(m.lookup("gg"), (Some("scroll-top".into()), false));
         assert_eq!(m.lookup("gx"), (None, false));
         assert_eq!(m.lookup("<Shift-Left>"), (Some("tab-move -1".into()), false));
+        assert_eq!(m.lookup("<Ctrl-c>"), (Some("stop".into()), false));
     }
 
     #[test]

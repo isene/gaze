@@ -18,6 +18,7 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 | `f` / `F` | Hints: type the letters on a link to follow it / open it in a background tab |
 | `H` / `L`, `Ctrl-Left` / `Ctrl-Right` | Back / forward in this tab's history |
 | `r` | Reload |
+| `Ctrl-c` | Stop loading the page |
 | `j` `k` `h` `l`, `gg`, `G`, `Ctrl-d` / `Ctrl-u`, `Space` | Scroll |
 | `/`, `n` / `N` | Find on the page (the status line says when nothing matches) |
 | `Ctrl-f` | Only the page: hide the tab bar and the status line; again to bring them back |
