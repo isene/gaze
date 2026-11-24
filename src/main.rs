@@ -713,6 +713,18 @@ fn make_view(shared: &Shared, id: u64, related: Option<&WebView>) -> WebView {
             refresh(&s);
         });
     }
+    if let Some(fc) = view.find_controller() {
+        // A search with no match says so in the status line; the next
+        // search that finds one takes the note away.
+        let s = shared.clone();
+        fc.connect_failed_to_find_text(move |fc| {
+            set_message(&s, &no_match(&fc.search_text().unwrap_or_default()));
+        });
+        let s = shared.clone();
+        fc.connect_found_text(move |_, _| {
+            if s.borrow().message.starts_with(NO_MATCH) { set_message(&s, ""); }
+        });
+    }
     {
         // An upload button: pointer picks the files, in a terminal window.
         let s = shared.clone();
@@ -2381,6 +2393,12 @@ fn complete_move(shared: &Shared, dir: i32) {
     if text.ends_with(' ') { on_entry_changed(shared); } else { render_completion(shared); }
 }
 
+const NO_MATCH: &str = "No match for ";
+
+fn no_match(text: &str) -> String {
+    format!("{NO_MATCH}\"{text}\"")
+}
+
 fn find(shared: &Shared, text: &str) {
     let text = if text.is_empty() { shared.borrow().find.clone() } else { text.to_string() };
     if text.is_empty() { return; }
@@ -3280,7 +3298,14 @@ paper size (<code>paper: a4</code>), zoom, scroll step, ad blocking, text size o
 
 #[cfg(test)]
 mod tests {
-    use super::{free_path, home_html, page_name, paper_name, phone_page, picked, picked_files, right_text, saved, sent_note, tabbar_markup, Tabs};
+    use super::{free_path, home_html, no_match, NO_MATCH, page_name, paper_name, phone_page, picked, picked_files, right_text, saved, sent_note, tabbar_markup, Tabs};
+
+    #[test]
+    fn a_search_with_no_match_names_the_word() {
+        let note = no_match("zzz");
+        assert_eq!(note, "No match for \"zzz\"");
+        assert!(note.starts_with(NO_MATCH));
+    }
 
     #[test]
     fn the_phone_page_lists_web_tabs_and_says_when_there_are_none() {

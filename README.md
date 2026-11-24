@@ -19,7 +19,7 @@ Press `?` inside gaze for the full list, with the keys as they are bound right n
 | `H` / `L`, `Ctrl-Left` / `Ctrl-Right` | Back / forward in this tab's history |
 | `r` | Reload |
 | `j` `k` `h` `l`, `gg`, `G`, `Ctrl-d` / `Ctrl-u`, `Space` | Scroll |
-| `/`, `n` / `N` | Find on the page |
+| `/`, `n` / `N` | Find on the page (the status line says when nothing matches) |
 | `Ctrl-f` | Only the page: hide the tab bar and the status line; again to bring them back |
 | `D` | Dark pages on or off for this site, kept for next time (see Dark pages) |
 | `gr` | Reader view: the article alone, without menus and side columns; again for the page as it was (see Reader view) |
